@@ -1,0 +1,34 @@
+name: MrSellChests
+version: 2.1.2
+main: eu.mrneznamy.mrSellChests.MrSellChests
+api-version: '1.21'
+authors: [_MrNeznamy_]
+description: A plugin that allows players to create and manage sell chests
+website: https://github.com/MrNeznamy/MrSellChests
+depend: [MrLibCore]
+softdepend:
+  - CMI
+  - DecentHolograms
+  - ShopGUIPlus
+  - EconomyShopGUI
+  - MrUltimateShop
+  - ExcellentShop
+  - Vault
+commands:
+  msc:
+    description: Main command for MrSellChests
+    usage: /<command> [reload|give|list|banned]
+    aliases: [mrsellchests, sellchest]
+permissions:
+  mrsellchests.reload:
+    description: Allows reloading the plugin configuration
+    default: op
+  mrsellchests.give:
+    description: Allows giving sell chests to players
+    default: op
+  mrsellchests.boost:
+    description: Allows managing boosters
+    default: op
+  mrsellchests.banned:
+    description: Allows managing banned items
+    default: op
