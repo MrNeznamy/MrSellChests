@@ -22,6 +22,7 @@ import java.util.UUID;
 import me.gypopo.economyshopgui.api.EconomyShopGUIHook;
 import me.gypopo.economyshopgui.api.objects.SellPrice;
 import net.brcdev.shopgui.ShopGuiPlusApi;
+import eu.mrneznamy.mrSellChests.integration.StackerHandler;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
@@ -59,9 +60,17 @@ public class SellChestManager {
     private BukkitTask chargingTask;
     private final Map<String, String> chestTypes = new HashMap<String, String>();
     private final Map<String, FileConfiguration> configCache = new HashMap<String, FileConfiguration>();
+    private StackerHandler roseStackerIntegration;
 
     public SellChestManager(MrSellChests plugin) {
         this.plugin = plugin;
+        if (Bukkit.getPluginManager().isPluginEnabled("RoseStacker")) {
+            try {
+                this.roseStackerIntegration = (StackerHandler) Class.forName("eu.mrneznamy.mrSellChests.integration.RoseStackerIntegration").getConstructor().newInstance();
+            } catch (Exception e) {
+                plugin.getLogger().warning("Failed to hook into RoseStacker: " + e.getMessage());
+            }
+        }
         this.chestInventories = new HashMap<String, Inventory>();
         this.sellTasks = new HashMap<String, BukkitTask>();
         this.sellIntervals = new HashMap<String, Integer>();
@@ -320,10 +329,34 @@ public class SellChestManager {
                         return;
                     }
                     for (Entity entity : Arrays.asList(loc.getChunk().getEntities())) {
-                        Item item;
-                        ItemStack stack;
-                        if (!(entity instanceof Item) || Commands.isItemBanned(stack = (item = (Item)entity).getItemStack(), "COLLECT", this.plugin) || !this.addItemToChest(key, stack)) continue;
-                        item.remove();
+                        if (!(entity instanceof Item)) continue;
+
+                        Item itemEntity = (Item) entity;
+                        ItemStack stack = itemEntity.getItemStack();
+
+                        if (Commands.isItemBanned(stack, "COLLECT", this.plugin)) continue;
+
+                        int originalAmount = stack.getAmount();
+                        if (roseStackerIntegration != null) {
+                            originalAmount = roseStackerIntegration.getItemStackSize(itemEntity);
+                        }
+
+                        int remaining = this.addItemToChestGetRemaining(key, stack, originalAmount);
+
+                        if (remaining != originalAmount) {
+                            if (remaining <= 0) {
+                                itemEntity.remove();
+                            } else {
+                                if (roseStackerIntegration != null) {
+                                    roseStackerIntegration.setItemStackSize(itemEntity, remaining);
+                                } else {
+                                    ItemStack newStack = stack.clone();
+                                    newStack.setAmount(remaining);
+                                    itemEntity.setItemStack(newStack);
+                                }
+                            }
+                            this.saveChestInventory(key);
+                        }
                     }
                 }
                 catch (Exception e) {
@@ -376,10 +409,14 @@ public class SellChestManager {
     }
 
     public boolean addItemToChest(String chestKey, ItemStack item) {
+        return this.addItemToChestGetRemaining(chestKey, item, item.getAmount()) == 0;
+    }
+
+    public int addItemToChestGetRemaining(String chestKey, ItemStack item, int amount) {
         Inventory sellInv;
         double itemPrice;
         if (item == null) {
-            return false;
+            return 0;
         }
         SellChestsDatabaseManager dbManager = this.plugin.getDatabaseManager();
         if (!dbManager.chestExists(chestKey) || dbManager.getChestType(chestKey) == null) {
@@ -387,7 +424,7 @@ public class SellChestManager {
             if (task != null) {
                 task.cancel();
             }
-            return false;
+            return amount;
         }
         OfflinePlayer player = null;
         String ownerUUID = dbManager.getChestPlayerUuid(chestKey);
@@ -402,55 +439,85 @@ public class SellChestManager {
         if ((itemPrice = this.getItemPrice(item, player)) > 0.0) {
             Inventory sellInv2 = this.getChestInventory(chestKey);
             if (sellInv2 != null) {
-                HashMap leftover = sellInv2.addItem(new ItemStack[]{item.clone()});
-                return leftover.isEmpty();
+                int remaining = this.addItemsToInventory(sellInv2, item, amount);
+                if (amount - remaining > 0) {
+                     // this.plugin.getLogger().info("Added " + (amount - remaining) + " of " + item.getType() + " to chest " + chestKey + ". Price: " + itemPrice);
+                }
+                return remaining;
             }
-            return false;
+            return amount;
         }
+        
         String trasherMode = dbManager.getChestTrasherMode(chestKey);
         if (trasherMode == null) {
+            // this.plugin.getLogger().info("Item " + item.getType() + " has no price. Trasher mode: REMOVE (Default)");
             trasherMode = "REMOVE";
+        } else {
+            // this.plugin.getLogger().info("Item " + item.getType() + " has no price. Trasher mode: " + trasherMode);
         }
         if ("TRANSFER".equals(trasherMode)) {
             Inventory sellInv3;
             List<String> linkedChests = dbManager.getLinkedChests(chestKey);
+            int currentRemaining = amount;
             if (!linkedChests.isEmpty()) {
                 for (String chestLoc : linkedChests) {
                     Container container;
-                    HashMap leftover;
                     Location loc;
                     Block block;
                     String[] parts = chestLoc.split(",");
-                    if (parts.length != 4 || !((block = (loc = new Location(Bukkit.getWorld((String)parts[0]), Double.parseDouble(parts[1]), Double.parseDouble(parts[2]), Double.parseDouble(parts[3]))).getBlock()).getState() instanceof Container) || !(leftover = (container = (Container)block.getState()).getInventory().addItem(new ItemStack[]{item.clone()})).isEmpty()) continue;
-                    return true;
+                    if (parts.length != 4 || !((block = (loc = new Location(Bukkit.getWorld((String)parts[0]), Double.parseDouble(parts[1]), Double.parseDouble(parts[2]), Double.parseDouble(parts[3]))).getBlock()).getState() instanceof Container)) continue;
+                    
+                    container = (Container)block.getState();
+                    currentRemaining = this.addItemsToInventory(container.getInventory(), item, currentRemaining);
+                    if (currentRemaining == 0) return 0;
                 }
             }
             if ((sellInv3 = this.getChestInventory(chestKey)) != null) {
-                HashMap leftover = sellInv3.addItem(new ItemStack[]{item.clone()});
-                if (!leftover.isEmpty()) {
-                    this.addItemToDeleteQueue(chestKey, item);
+                currentRemaining = this.addItemsToInventory(sellInv3, item, currentRemaining);
+                if (currentRemaining > 0) {
+                    this.addItemToDeleteQueue(chestKey, currentRemaining);
                 }
             } else {
-                this.addItemToDeleteQueue(chestKey, item);
+                this.addItemToDeleteQueue(chestKey, currentRemaining);
             }
-            return true;
+            return 0;
         }
         if ("REMOVE".equals(trasherMode)) {
-            this.addItemToDeleteQueue(chestKey, item);
-            return true;
+            this.addItemToDeleteQueue(chestKey, amount);
+            return 0;
         }
         if ("KEEP".equals(trasherMode) && (sellInv = this.getChestInventory(chestKey)) != null) {
-            HashMap leftover = sellInv.addItem(new ItemStack[]{item.clone()});
-            return leftover.isEmpty();
+            return this.addItemsToInventory(sellInv, item, amount);
         }
-        return false;
+        return amount;
     }
 
-    private void addItemToDeleteQueue(String key, ItemStack item) {
+    private int addItemsToInventory(Inventory inv, ItemStack item, int amount) {
+        int remaining = amount;
+        int maxStackSize = item.getMaxStackSize();
+        while (remaining > 0) {
+            int chunk = Math.min(remaining, maxStackSize);
+            ItemStack stack = item.clone();
+            stack.setAmount(chunk);
+            HashMap<Integer, ItemStack> leftovers = inv.addItem(stack);
+            int failedToAdd = 0;
+            if (!leftovers.isEmpty()) {
+                failedToAdd = leftovers.values().stream().mapToInt(ItemStack::getAmount).sum();
+            }
+            int added = chunk - failedToAdd;
+            remaining -= added;
+            if (failedToAdd > 0) {
+                return remaining;
+            }
+        }
+        return 0;
+    }
+
+    private void addItemToDeleteQueue(String key, int amount) {
         try {
             SellChestsDatabaseManager dbManager = this.plugin.getDatabaseManager();
             int currentPendingDeleted = dbManager.getPendingDeletedItems(key);
-            dbManager.setPendingDeletedItems(key, currentPendingDeleted + item.getAmount());
+            dbManager.setPendingDeletedItems(key, currentPendingDeleted + amount);
         }
         catch (Exception e) {
             e.printStackTrace();
@@ -535,6 +602,7 @@ public class SellChestManager {
                 double itemPrice;
                 item = inv.getItem(i);
                 if (item == null || item.getType() == Material.AIR || Commands.isItemBanned(item, "SELL", this.plugin) || !((itemPrice = this.getItemPrice(item, player)) > 0.0)) continue;
+
                 totalEarnings += itemPrice * (double)item.getAmount() * booster;
                 itemsSold += item.getAmount();
                 inv.setItem(i, null);

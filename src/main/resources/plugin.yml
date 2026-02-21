@@ -1,5 +1,5 @@
 name: MrSellChests
-version: 2.1.2
+version: 2.1.3
 main: eu.mrneznamy.mrSellChests.MrSellChests
 api-version: '1.21'
 authors: [_MrNeznamy_]
@@ -14,6 +14,7 @@ softdepend:
   - MrUltimateShop
   - ExcellentShop
   - Vault
+  - RoseStacker
 commands:
   msc:
     description: Main command for MrSellChests
