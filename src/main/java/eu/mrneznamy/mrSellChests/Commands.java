@@ -82,6 +82,22 @@ implements CommandExecutor {
             }
             return true;
         }
+        if (args[0].equalsIgnoreCase("admin")) {
+            if (!sender.hasPermission("mrsellchests.admin")) {
+                if (sender instanceof Player) {
+                    this.plugin.sendMessage((Player)sender, this.plugin.getMessage("no_permission"));
+                } else {
+                    sender.sendMessage("No permission");
+                }
+                return true;
+            }
+            if (args.length >= 3 && args[1].equalsIgnoreCase("import") && args[2].equalsIgnoreCase("VoidChest")) {
+                new VoidChestImporter(this.plugin).importVoidChests(sender);
+                return true;
+            }
+            sender.sendMessage(MrLibColors.colorize("&cUsage: /msc admin import VoidChest"));
+            return true;
+        }
         if (args[0].equalsIgnoreCase("reload")) {
             if (!sender.hasPermission("mrsellchests.reload")) {
                 this.plugin.sendMessage((Player)sender, this.plugin.getMessage("no_permission"));
@@ -263,6 +279,22 @@ implements CommandExecutor {
                 msg2 = msg2 != null ? ((String)msg2).replace("{boost}", String.valueOf(boost)).replace("{duration}", String.valueOf(duration)) : "(!message!)&aYou received a temporary sell chest boost: " + boost + "x for " + duration + "s!";
                 this.plugin.sendMessage(target, (String)msg2);
             }
+            return true;
+        }
+        if (args[0].equalsIgnoreCase("admin")) {
+            if (!sender.hasPermission("mrsellchests.admin")) {
+                if (sender instanceof Player) {
+                    this.plugin.sendMessage((Player)sender, this.plugin.getMessage("no_permission"));
+                } else {
+                    sender.sendMessage("No permission");
+                }
+                return true;
+            }
+            if (args.length >= 3 && args[1].equalsIgnoreCase("import") && args[2].equalsIgnoreCase("VoidChest")) {
+                new VoidChestImporter(this.plugin).importVoidChests(sender);
+                return true;
+            }
+            sender.sendMessage(MrLibColors.colorize("&cUsage: /msc admin import VoidChest"));
             return true;
         }
         if (args[0].equalsIgnoreCase("banned")) {

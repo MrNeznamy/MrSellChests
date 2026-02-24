@@ -21,6 +21,9 @@ commands:
     usage: /<command> [reload|give|list|banned]
     aliases: [mrsellchests, sellchest]
 permissions:
+  mrsellchests.admin:
+    description: Allows administrative commands like import
+    default: op
   mrsellchests.reload:
     description: Allows reloading the plugin configuration
     default: op

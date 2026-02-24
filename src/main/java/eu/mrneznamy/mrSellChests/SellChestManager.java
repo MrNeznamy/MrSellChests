@@ -39,6 +39,7 @@ import org.bukkit.entity.Entity;
 import org.bukkit.entity.Item;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.Inventory;
+import org.bukkit.inventory.InventoryView;
 import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
@@ -61,6 +62,9 @@ public class SellChestManager {
     private final Map<String, String> chestTypes = new HashMap<String, String>();
     private final Map<String, FileConfiguration> configCache = new HashMap<String, FileConfiguration>();
     private StackerHandler roseStackerIntegration;
+    
+    private final Map<String, Integer> chargingSecondsCache = new HashMap<>();
+    private final Map<UUID, String> openMenus = new HashMap<>();
 
     public SellChestManager(MrSellChests plugin) {
         this.plugin = plugin;
@@ -83,6 +87,7 @@ public class SellChestManager {
         this.startSellTasks();
         this.startSellMessageTask();
         this.startChargingTasks();
+        this.startMenuUpdateTask();
     }
 
     private BukkitTask createTask(Runnable runnable, long delay, long period, boolean async) {
@@ -394,14 +399,37 @@ public class SellChestManager {
             SellChestsDatabaseManager dbManager = this.plugin.getDatabaseManager();
             for (String key : this.chestInventories.keySet()) {
                 try {
-                    int currentCharge;
                     String chestType = this.chestTypes.computeIfAbsent(key, k -> dbManager.getChestType((String)k));
-                    if (!"Charging".equalsIgnoreCase(chestType) || (currentCharge = dbManager.getChestChargingMinutes(key)) <= 0) continue;
-                    dbManager.setChestChargingMinutes(key, (int)((double)currentCharge - 0.016666666666666666));
+                    boolean isCharging = "Charging".equalsIgnoreCase(chestType) || this.plugin.getConfig().getBoolean("MrSellChests.SellChests." + chestType + ".Chest.Charging.Enabled", false);
+                    
+                    if (!isCharging) continue;
+                    
+                    int seconds = this.chargingSecondsCache.computeIfAbsent(key, k -> dbManager.getChestChargingMinutes(k) * 60);
+                    
+                    if (seconds > 0) {
+                        seconds--;
+                        this.chargingSecondsCache.put(key, seconds);
+                        
+                        if (seconds % 60 == 0 || seconds == 0) {
+                            dbManager.setChestChargingMinutes(key, seconds / 60);
+                        }
+                    }
                 }
-                catch (Exception exception) {}
+                catch (Exception exception) {
+                    exception.printStackTrace();
+                }
             }
         }, 20L, 20L, true);
+    }
+    
+    public int getRemainingChargingSeconds(String key) {
+        if (this.chargingSecondsCache.containsKey(key)) {
+            return this.chargingSecondsCache.get(key);
+        }
+        int minutes = this.plugin.getDatabaseManager().getChestChargingMinutes(key);
+        int seconds = minutes * 60;
+        this.chargingSecondsCache.put(key, seconds);
+        return seconds;
     }
 
     public Inventory getChestInventory(String key) {
@@ -450,10 +478,7 @@ public class SellChestManager {
         
         String trasherMode = dbManager.getChestTrasherMode(chestKey);
         if (trasherMode == null) {
-            // this.plugin.getLogger().info("Item " + item.getType() + " has no price. Trasher mode: REMOVE (Default)");
             trasherMode = "REMOVE";
-        } else {
-            // this.plugin.getLogger().info("Item " + item.getType() + " has no price. Trasher mode: " + trasherMode);
         }
         if ("TRANSFER".equals(trasherMode)) {
             Inventory sellInv3;
@@ -575,7 +600,8 @@ public class SellChestManager {
             if (chestType == null) {
                 return;
             }
-            if ("Charging".equalsIgnoreCase(chestType) && (currentCharge = dbManager.getChestChargingMinutes(key)) <= 0) {
+            boolean isCharging = "Charging".equalsIgnoreCase(chestType) || this.plugin.getConfig().getBoolean("MrSellChests.SellChests." + chestType + ".Chest.Charging.Enabled", false);
+            if (isCharging && (currentCharge = dbManager.getChestChargingMinutes(key)) <= 0) {
                 this.lastSellTimes.put(key, System.currentTimeMillis());
                 return;
             }
@@ -731,6 +757,168 @@ public class SellChestManager {
         this.lastSellTimes.remove(key);
     }
 
+    private void startMenuUpdateTask() {
+        this.createTask(() -> {
+            for (Map.Entry<UUID, String> entry : new HashMap<>(this.openMenus).entrySet()) {
+                UUID playerId = entry.getKey();
+                String chestKey = entry.getValue();
+                Player player = Bukkit.getPlayer(playerId);
+                
+                if (player == null || !player.isOnline()) {
+                    this.openMenus.remove(playerId);
+                    continue;
+                }
+                
+                InventoryView openInv = player.getOpenInventory();
+                String title = this.plugin.getConfig().getString("MrSellChests.SettingsMenu.title", "&8Sell Chest Menu");
+                if (openInv == null || !MrLibColors.colorize(title).equals(openInv.getTitle())) {
+                    this.openMenus.remove(playerId);
+                    continue;
+                }
+                
+                this.updateSettingsMenu(player, chestKey, openInv.getTopInventory());
+            }
+        }, 20L, 20L, true);
+    }
+
+    private void updateSettingsMenu(Player player, String chestKey, Inventory gui) {
+        FileConfiguration config = this.plugin.getConfig();
+        String chestType = this.plugin.getDatabaseManager().getChestType(chestKey);
+        String ownerName = this.plugin.getDatabaseManager().getChestOwner(chestKey);
+        Object booster = String.format("%.2f", this.getTotalBooster(chestKey));
+        long boostTime = this.getBoostTimeLeft(chestKey);
+        
+        if (boostTime > 0L) {
+            String timeFormat;
+            if (boostTime >= 86400) {
+                timeFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Days", 
+                        this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat", "%d d %h h %m m %s s"));
+            } else if (boostTime >= 3600) {
+                timeFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Hours", 
+                        "%h h %m m %s s");
+            } else if (boostTime >= 60) {
+                timeFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Minutes", 
+                        "%m m %s s");
+            } else {
+                timeFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Seconds", 
+                        "%s s");
+            }
+            
+            String formattedTime = this.formatTime(boostTime, timeFormat);
+            
+            Object timeMsg = this.plugin.getMessage("boost_time_left");
+            timeMsg = timeMsg != null ? ((String)timeMsg).replace("[Time]", formattedTime) : "&7Boost time left: " + formattedTime;
+            booster = (String)booster + " " + (String)timeMsg;
+        }
+        int itemsSold = this.plugin.getDatabaseManager().getItemsSold(chestKey);
+        int deletedItems = this.plugin.getDatabaseManager().getDeletedItems(chestKey);
+        double moneyEarned = this.plugin.getDatabaseManager().getMoneyEarned(chestKey);
+        boolean hologramEnabled = this.plugin.getDatabaseManager().getChestHologramEnabled(chestKey);
+        boolean chunkCollectorEnabled = this.plugin.getDatabaseManager().getChestCollectorEnabled(chestKey);
+        
+        int currentChargeSeconds = this.getRemainingChargingSeconds(chestKey);
+        
+        String chargedFormat;
+        if (currentChargeSeconds >= 86400) {
+            chargedFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Days", 
+                    this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat", "%d d %h h %m m %s s"));
+        } else if (currentChargeSeconds >= 3600) {
+            chargedFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Hours", 
+                    "%h h %m m %s s");
+        } else if (currentChargeSeconds >= 60) {
+            chargedFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Minutes", 
+                    "%m m %s s");
+        } else {
+            chargedFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Seconds", 
+                    "%s s");
+        }
+        String formattedCharged = this.formatTime(currentChargeSeconds, chargedFormat);
+        
+        int maxChargeMinutes = this.plugin.getDatabaseManager().getChestChargingMaxMinutes(chestKey);
+        
+        long maxChargedSeconds = maxChargeMinutes * 60L;
+        String maxChargedFormat;
+        if (maxChargedSeconds >= 86400) {
+            maxChargedFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Days", 
+                    this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat", "%d d %h h %m m %s s"));
+        } else if (maxChargedSeconds >= 3600) {
+            maxChargedFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Hours", 
+                    "%h h %m m %s s");
+        } else if (maxChargedSeconds >= 60) {
+            maxChargedFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Minutes", 
+                    "%m m %s s");
+        } else {
+            maxChargedFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Seconds", 
+                    "%s s");
+        }
+        String formattedMaxCharged = this.formatTime(maxChargedSeconds, maxChargedFormat);
+        
+        double pricePerCharge = config.getDouble("MrSellChests.SellChests." + chestType + ".Chest.Charging.PriceForCharge", 10000.0);
+        Map<String, Double> invitedPlayersMap = this.plugin.getDatabaseManager().getChestInvitedPlayers(chestKey);
+        int maxPlayersCount = this.plugin.getDatabaseManager().getChestInvitePlayersMax(chestKey);
+        List<String> linkedChests = this.plugin.getDatabaseManager().getLinkedChests(chestKey);
+        int maxLinks = config.getInt("MrSellChests.SellChests." + chestType + ".Chest.MaxLinks", 1);
+        String trasherMode = this.plugin.getDatabaseManager().getChestTrasherMode(chestKey);
+        if (trasherMode == null) trasherMode = "REMOVE";
+
+        if (config.getConfigurationSection("MrSellChests.SettingsMenu.items") != null) {
+            for (String itemKey : config.getConfigurationSection("MrSellChests.SettingsMenu.items").getKeys(false)) {
+                String path = "MrSellChests.SettingsMenu.items." + itemKey;
+                int slot = config.getInt(path + ".slot", 0);
+                boolean isCharging = "Charging".equalsIgnoreCase(chestType) || config.getBoolean("MrSellChests.SellChests." + chestType + ".Chest.Charging.Enabled", false);
+                if (itemKey.equals("charge_chest") && !isCharging) continue;
+                
+                if (itemKey.equals("trasher")) {
+                    this.updateTrasherItem(gui, chestKey, trasherMode);
+                    continue;
+                }
+                if (itemKey.equals("toggle_hologram")) {
+                    this.updateHologramItem(gui, chestKey, hologramEnabled);
+                    continue;
+                }
+                if (itemKey.equals("chunk_collector")) {
+                    this.updateCollectorItem(gui, chestKey, chunkCollectorEnabled);
+                    continue;
+                }
+                
+                Material material = Material.valueOf((String)config.getString(path + ".material", "STONE").toUpperCase());
+                ItemStack item = new ItemStack(material);
+                ItemMeta meta = item.getItemMeta();
+                if (meta == null) continue;
+                meta.setDisplayName(MrLibColors.colorize((String)config.getString(path + ".name", "&eItem")));
+                List<String> lore = config.getStringList(path + ".lore");
+                ArrayList<String> colorizedLore = new ArrayList<String>();
+                for (String line : lore) {
+                    String trasherModeDisplay = trasherMode;
+                    if (itemKey.equals("trasher")) {
+                        trasherModeDisplay = this.getMessageSafe("trasher_mode_" + trasherMode.toUpperCase(), trasherMode);
+                    }
+                    String statusText = "Disabled";
+                    if (itemKey.equals("toggle_hologram")) {
+                        statusText = hologramEnabled ? this.getMessageSafe("state_enabled", "Enabled") : this.getMessageSafe("state_disabled", "Disabled");
+                    } else if (itemKey.equals("chunk_collector")) {
+                        statusText = chunkCollectorEnabled ? this.getMessageSafe("state_enabled", "Enabled") : this.getMessageSafe("state_disabled", "Disabled");
+                    } else {
+                        statusText = String.valueOf(trasherModeDisplay);
+                    }
+                    
+                    line = line.replace("[PlayerName]", String.valueOf(ownerName)).replace("[Booster]", String.valueOf(booster)).replace("[ItemsSold]", String.valueOf(itemsSold)).replace("[DeletedItems]", String.valueOf(deletedItems)).replace("[MoneyEarned]", String.format("%.2f", moneyEarned)).replace("[Status]", statusText).replace("[CurrentPlayers]", String.valueOf(invitedPlayersMap.size())).replace("[MaxPlayers]", String.valueOf(maxPlayersCount)).replace("[CurrentCharge]", formattedCharged).replace("[MaxCharge]", formattedMaxCharged).replace("[Pricepercharge]", String.format("%.2f", pricePerCharge));
+                    colorizedLore.add(MrLibColors.colorize(line));
+                }
+                meta.setLore(colorizedLore);
+                
+                NamespacedKey chestKeyNS = new NamespacedKey((Plugin)this.plugin, "chest_key");
+                meta.getPersistentDataContainer().set(chestKeyNS, PersistentDataType.STRING, chestKey);
+                
+                NamespacedKey actionKey = new NamespacedKey((Plugin)this.plugin, "menu_action");
+                meta.getPersistentDataContainer().set(actionKey, PersistentDataType.STRING, itemKey);
+                
+                item.setItemMeta(meta);
+                gui.setItem(slot, item);
+            }
+        }
+    }
+
     public void openSettingsMenu(Player player, String chestKey) {
         FileConfiguration config = this.plugin.getConfig();
         String title = config.getString("MrSellChests.SettingsMenu.title", "&8Sell Chest Menu");
@@ -738,7 +926,9 @@ public class SellChestManager {
         int rows = size / 9;
         MrLibGUI gui = new MrLibGUI(MrLibColors.colorize((String)title), rows);
         String trasherMode = this.plugin.getDatabaseManager().getChestTrasherMode(chestKey);
+        if (trasherMode == null) trasherMode = "REMOVE";
         String chestType = this.plugin.getDatabaseManager().getChestType(chestKey);
+        
         if (config.getConfigurationSection("MrSellChests.SettingsMenu.Filters") != null) {
             for (String filterKey : config.getConfigurationSection("MrSellChests.SettingsMenu.Filters").getKeys(false)) {
                 String[] slots;
@@ -766,8 +956,25 @@ public class SellChestManager {
         Object booster = String.format("%.2f", this.getTotalBooster(chestKey));
         long boostTime = this.getBoostTimeLeft(chestKey);
         if (boostTime > 0L) {
+            String timeFormat;
+            if (boostTime >= 86400) {
+                timeFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Days", 
+                        this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat", "%d d %h h %m m %s s"));
+            } else if (boostTime >= 3600) {
+                timeFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Hours", 
+                        "%h h %m m %s s");
+            } else if (boostTime >= 60) {
+                timeFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Minutes", 
+                        "%m m %s s");
+            } else {
+                timeFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Seconds", 
+                        "%s s");
+            }
+            
+            String formattedTime = this.formatTime(boostTime, timeFormat);
+            
             Object timeMsg = this.plugin.getMessage("boost_time_left");
-            timeMsg = timeMsg != null ? ((String)timeMsg).replace("[Time]", String.valueOf(boostTime)) : "&7Boost time left: " + boostTime;
+            timeMsg = timeMsg != null ? ((String)timeMsg).replace("[Time]", formattedTime) : "&7Boost time left: " + formattedTime;
             booster = (String)booster + " " + (String)timeMsg;
         }
         int itemsSold = this.plugin.getDatabaseManager().getItemsSold(chestKey);
@@ -775,8 +982,43 @@ public class SellChestManager {
         double moneyEarned = this.plugin.getDatabaseManager().getMoneyEarned(chestKey);
         boolean hologramEnabled = this.plugin.getDatabaseManager().getChestHologramEnabled(chestKey);
         boolean chunkCollectorEnabled = this.plugin.getDatabaseManager().getChestCollectorEnabled(chestKey);
-        int currentChargeMinutes = this.plugin.getDatabaseManager().getChestChargingMinutes(chestKey);
+        int currentChargeSeconds = this.getRemainingChargingSeconds(chestKey);
+        
+        String chargedFormat;
+        if (currentChargeSeconds >= 86400) {
+            chargedFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Days", 
+                    this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat", "%d d %h h %m m %s s"));
+        } else if (currentChargeSeconds >= 3600) {
+            chargedFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Hours", 
+                    "%h h %m m %s s");
+        } else if (currentChargeSeconds >= 60) {
+            chargedFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Minutes", 
+                    "%m m %s s");
+        } else {
+            chargedFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Seconds", 
+                    "%s s");
+        }
+        String formattedCharged = this.formatTime(currentChargeSeconds, chargedFormat);
+        
         int maxChargeMinutes = this.plugin.getDatabaseManager().getChestChargingMaxMinutes(chestKey);
+        
+        long maxChargedSeconds = maxChargeMinutes * 60L;
+        String maxChargedFormat;
+        if (maxChargedSeconds >= 86400) {
+            maxChargedFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Days", 
+                    this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat", "%d d %h h %m m %s s"));
+        } else if (maxChargedSeconds >= 3600) {
+            maxChargedFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Hours", 
+                    "%h h %m m %s s");
+        } else if (maxChargedSeconds >= 60) {
+            maxChargedFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Minutes", 
+                    "%m m %s s");
+        } else {
+            maxChargedFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Seconds", 
+                    "%s s");
+        }
+        String formattedMaxCharged = this.formatTime(maxChargedSeconds, maxChargedFormat);
+        
         double pricePerCharge = config.getDouble("MrSellChests.SellChests." + chestType + ".Chest.Charging.PriceForCharge", 10000.0);
         Map<String, Double> invitedPlayersMap = this.plugin.getDatabaseManager().getChestInvitedPlayers(chestKey);
         int maxPlayersCount = this.plugin.getDatabaseManager().getChestInvitePlayersMax(chestKey);
@@ -787,7 +1029,8 @@ public class SellChestManager {
             for (String itemKey : config.getConfigurationSection("MrSellChests.SettingsMenu.items").getKeys(false)) {
                 String path = "MrSellChests.SettingsMenu.items." + itemKey;
                 int slot = config.getInt(path + ".slot", 0);
-                if (itemKey.equals("charge_chest") && !"Charging".equalsIgnoreCase(chestType)) continue;
+                boolean isCharging = "Charging".equalsIgnoreCase(chestType) || config.getBoolean("MrSellChests.SellChests." + chestType + ".Chest.Charging.Enabled", false);
+                if (itemKey.equals("charge_chest") && !isCharging) continue;
                 if (itemKey.equals("trasher")) {
                     String linkMaterialStr;
                     Material linkMaterial;
@@ -808,6 +1051,12 @@ public class SellChestManager {
                         colorizedLore.add(MrLibColors.colorize(line));
                     }
                     trasherMeta.setLore(colorizedLore);
+                    
+                    NamespacedKey chestKeyNS = new NamespacedKey((Plugin)this.plugin, "chest_key");
+                    trasherMeta.getPersistentDataContainer().set(chestKeyNS, PersistentDataType.STRING, chestKey);
+                    NamespacedKey actionKey = new NamespacedKey((Plugin)this.plugin, "menu_action");
+                    trasherMeta.getPersistentDataContainer().set(actionKey, PersistentDataType.STRING, "trasher");
+                    
                     trasher.setItemMeta(trasherMeta);
                     String finalChestKey = chestKey;
                     MrLibGUI finalGui = gui;
@@ -825,6 +1074,12 @@ public class SellChestManager {
                         colorizedLinkLore.add(MrLibColors.colorize(line));
                     }
                     linkMeta.setLore(colorizedLinkLore);
+                    
+                    linkMeta.getPersistentDataContainer().set(chestKeyNS, PersistentDataType.STRING, chestKey);
+                    linkMeta.getPersistentDataContainer().set(actionKey, PersistentDataType.STRING, "trasher");
+                    NamespacedKey linkKey = new NamespacedKey((Plugin)this.plugin, "Link_Item");
+                    linkMeta.getPersistentDataContainer().set(linkKey, PersistentDataType.STRING, "true");
+                    
                     linkItem.setItemMeta(linkMeta);
                     String finalChestKey2 = chestKey;
                     MrLibGUI finalGui2 = gui;
@@ -847,10 +1102,16 @@ public class SellChestManager {
                     if (itemKey.equals("trasher") && (trasherModeDisplay = this.plugin.getMessage("trasher_mode_" + trasherMode.toUpperCase())) == null) {
                         trasherModeDisplay = trasherMode;
                     }
-                    line = line.replace("[PlayerName]", String.valueOf(ownerName)).replace("[Booster]", String.valueOf(booster)).replace("[ItemsSold]", String.valueOf(itemsSold)).replace("[DeletedItems]", String.valueOf(deletedItems)).replace("[MoneyEarned]", String.format("%.2f", moneyEarned)).replace("[Status]", itemKey.equals("toggle_hologram") ? (hologramEnabled ? this.plugin.getMessage("state_enabled") : this.plugin.getMessage("state_disabled")) : (itemKey.equals("chunk_collector") ? (chunkCollectorEnabled ? this.plugin.getMessage("state_enabled") : this.plugin.getMessage("state_disabled")) : String.valueOf(trasherModeDisplay))).replace("[CurrentPlayers]", String.valueOf(invitedPlayersMap.size())).replace("[MaxPlayers]", String.valueOf(maxPlayersCount)).replace("[CurrentCharge]", String.valueOf(currentChargeMinutes)).replace("[MaxCharge]", String.valueOf(maxChargeMinutes)).replace("[Pricepercharge]", String.format("%.2f", pricePerCharge));
+                    line = line.replace("[PlayerName]", String.valueOf(ownerName)).replace("[Booster]", String.valueOf(booster)).replace("[ItemsSold]", String.valueOf(itemsSold)).replace("[DeletedItems]", String.valueOf(deletedItems)).replace("[MoneyEarned]", String.format("%.2f", moneyEarned)).replace("[Status]", itemKey.equals("toggle_hologram") ? (hologramEnabled ? this.plugin.getMessage("state_enabled") : this.plugin.getMessage("state_disabled")) : (itemKey.equals("chunk_collector") ? (chunkCollectorEnabled ? this.plugin.getMessage("state_enabled") : this.plugin.getMessage("state_disabled")) : String.valueOf(trasherModeDisplay))).replace("[CurrentPlayers]", String.valueOf(invitedPlayersMap.size())).replace("[MaxPlayers]", String.valueOf(maxPlayersCount)).replace("[CurrentCharge]", formattedCharged).replace("[MaxCharge]", formattedMaxCharged).replace("[Pricepercharge]", String.format("%.2f", pricePerCharge));
                     colorizedLore.add(MrLibColors.colorize(line));
                 }
                 meta.setLore(colorizedLore);
+                
+                NamespacedKey chestKeyNS = new NamespacedKey((Plugin)this.plugin, "chest_key");
+                meta.getPersistentDataContainer().set(chestKeyNS, PersistentDataType.STRING, chestKey);
+                NamespacedKey actionKey = new NamespacedKey((Plugin)this.plugin, "menu_action");
+                meta.getPersistentDataContainer().set(actionKey, PersistentDataType.STRING, itemKey);
+                
                 item.setItemMeta(meta);
                 String finalChestKey3 = chestKey;
                 String finalItemKey = itemKey;
@@ -862,7 +1123,30 @@ public class SellChestManager {
                 });
             }
         }
+        this.openMenus.put(player.getUniqueId(), chestKey);
         gui.open(player);
+    }
+
+    private String formatTime(long seconds, String format) {
+        long days = seconds / 86400;
+        long hours = (seconds % 86400) / 3600;
+        long minutes = (seconds % 3600) / 60;
+        long secs = seconds % 60;
+
+        String result = format
+                .replace("%d", String.valueOf(days))
+                .replace("%h", String.valueOf(hours))
+                .replace("%m", String.valueOf(minutes))
+                .replace("%s", String.valueOf(secs));
+        return MrLibColors.colorize(result);
+    }
+
+    public String getMessageSafe(String key, String def) {
+        String msg = this.plugin.getMessage(key);
+        if (msg == null || msg.startsWith("(!NOPREFIX!)") || msg.contains("!NOPREFIX!")) {
+            return def != null ? MrLibColors.colorize(def) : key;
+        }
+        return msg;
     }
 
     private void handleMenuClick(Player player, String chestKey, String action, boolean isRightClick, boolean isLinkItem, MrLibGUI gui) {
@@ -901,15 +1185,17 @@ public class SellChestManager {
             }
             case "charge_chest": {
                 String chestType = this.plugin.getDatabaseManager().getChestType(chestKey);
-                if ("Charging".equalsIgnoreCase(chestType)) {
+                boolean isCharging = "Charging".equalsIgnoreCase(chestType) || config.getBoolean("MrSellChests.SellChests." + chestType + ".Chest.Charging.Enabled", false);
+                if (isCharging) {
                     int maxCharge;
-                    int currentCharge = this.plugin.getDatabaseManager().getChestChargingMinutes(chestKey);
-                    if (currentCharge >= (maxCharge = this.plugin.getDatabaseManager().getChestChargingMaxMinutes(chestKey))) {
+                    int currentChargeMinutes = this.plugin.getDatabaseManager().getChestChargingMinutes(chestKey);
+                    if (currentChargeMinutes >= (maxCharge = this.plugin.getDatabaseManager().getChestChargingMaxMinutes(chestKey))) {
                         this.plugin.sendMessage(player, this.plugin.getMessage("chest_already_fully_charged"));
                         return;
                     }
                     double pricePerCharge = config.getDouble("MrSellChests.SellChests." + chestType + ".Chest.Charging.PriceForCharge", 10000.0);
-                    int minutesPerCharge = config.getInt("MrSellChests.SellChests." + chestType + ".Chest.Charging.PerUpgrade", 100);
+                    int timePerCharge = config.getInt("MrSellChests.SellChests." + chestType + ".Chest.Charging.PerUpgrade", 100);
+                    
                     double playerBalance = this.plugin.getEconomy().getBalance(player);
                     if (playerBalance < pricePerCharge) {
                         String msg = this.plugin.getMessage("chest_charge_not_enough_money");
@@ -919,14 +1205,36 @@ public class SellChestManager {
                         }
                         return;
                     }
-                    int minutesToAdd = Math.min(minutesPerCharge, maxCharge - currentCharge);
-                    double cost = pricePerCharge * ((double)minutesToAdd / (double)minutesPerCharge);
+                    
+                    int currentSeconds = this.getRemainingChargingSeconds(chestKey);
+                    int maxSeconds = maxCharge * 60;
+                    
+                    int secondsToAdd = Math.min(timePerCharge, maxSeconds - currentSeconds);
+                    if (secondsToAdd <= 0) {
+                         this.plugin.sendMessage(player, this.plugin.getMessage("chest_already_fully_charged"));
+                         return;
+                    }
+
+                    double cost = pricePerCharge * ((double)secondsToAdd / (double)timePerCharge);
+                    
                     this.plugin.getEconomy().withdraw((OfflinePlayer)player, cost);
-                    this.plugin.getDatabaseManager().setChestChargingMinutes(chestKey, currentCharge + minutesToAdd);
+                    
+                    int newSeconds = currentSeconds + secondsToAdd;
+                    this.chargingSecondsCache.put(chestKey, newSeconds);
+                    
+                    this.plugin.getDatabaseManager().setChestChargingMinutes(chestKey, newSeconds / 60);
+                    
                     String msg = this.plugin.getMessage("chest_charged_success");
-                    if (msg == null) break;
-                    msg = msg.replace("[Minutes]", String.valueOf(minutesToAdd)).replace("[Cost]", String.format("%.2f", cost));
-                    this.plugin.sendMessage(player, msg);
+                    if (msg != null) {
+                        msg = msg.replace("[Minutes]", String.valueOf(secondsToAdd)) 
+                                 .replace("[Seconds]", String.valueOf(secondsToAdd))
+                                 .replace("[Cost]", String.format("%.2f", cost));
+                        this.plugin.sendMessage(player, msg);
+                    }
+                    
+                    if (player.getOpenInventory().getTopInventory() != null) {
+                        this.updateSettingsMenu(player, chestKey, player.getOpenInventory().getTopInventory());
+                    }
                     break;
                 }
                 this.plugin.sendMessage(player, this.plugin.getMessage("chest_type_no_charging"));
@@ -965,13 +1273,10 @@ public class SellChestManager {
         }
         String newMode = "REMOVE".equals(currentMode = currentMode.toUpperCase()) ? "KEEP" : ("KEEP".equals(currentMode) ? "TRANSFER" : "REMOVE");
         this.plugin.getDatabaseManager().setChestTrasherMode(chestKey, newMode);
-        String rawMessage = this.plugin.getMessage("trasher_mode_changed");
-        if (rawMessage == null) {
-            rawMessage = "&7Trasher mode changed to: {mode}";
-        }
-        if ((modeDisplay = this.plugin.getMessage("trasher_mode_" + newMode.toUpperCase())) == null) {
-            modeDisplay = newMode;
-        }
+        
+        String rawMessage = this.getMessageSafe("trasher_mode_changed", "&7Trasher mode changed to: {mode}");
+        modeDisplay = this.getMessageSafe("trasher_mode_" + newMode.toUpperCase(), newMode);
+        
         String message = rawMessage.replace("{mode}", modeDisplay);
         this.plugin.sendMessage(player, message);
         player.closeInventory();
@@ -1467,4 +1772,3 @@ public class SellChestManager {
         }
     }
 }
-

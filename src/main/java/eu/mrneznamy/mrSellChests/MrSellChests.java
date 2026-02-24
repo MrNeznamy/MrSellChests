@@ -254,10 +254,28 @@ extends JavaPlugin {
             this.reloadConfig();
             this.reloadBannedItemsCache();
             this.reloadInviteMenuConfig();
+            this.reloadMessagesConfig();
+            this.reloadBoostersConfig();
             if (this.sellChestManager != null) {
                 this.sellChestManager.shutdown();
             }
             this.sellChestManager = new SellChestManager(this);
+            if (!this.getConfig().contains("MrSellChests.Holograms.TimeFormat")) {
+                this.getConfig().set("MrSellChests.Holograms.TimeFormat", "&e%d&7d &e%h&7h &e%m&7m &e%s&7s");
+            }
+            if (!this.getConfig().contains("MrSellChests.Holograms.TimeFormat_Days")) {
+                this.getConfig().set("MrSellChests.Holograms.TimeFormat_Days", "&e%d&7d &e%h&7h &e%m&7m &e%s&7s");
+            }
+            if (!this.getConfig().contains("MrSellChests.Holograms.TimeFormat_Hours")) {
+                this.getConfig().set("MrSellChests.Holograms.TimeFormat_Hours", "&e%h&7h &e%m&7m &e%s&7s");
+            }
+            if (!this.getConfig().contains("MrSellChests.Holograms.TimeFormat_Minutes")) {
+                this.getConfig().set("MrSellChests.Holograms.TimeFormat_Minutes", "&e%m&7m &e%s&7s");
+            }
+            if (!this.getConfig().contains("MrSellChests.Holograms.TimeFormat_Seconds")) {
+                this.getConfig().set("MrSellChests.Holograms.TimeFormat_Seconds", "&e%s&7s");
+            }
+            this.saveConfig();
             if (this.sellChestListener != null) {
                 this.sellChestListener.restartHologramUpdateTask();
                 this.sellChestListener.updateAllSellChestHolograms();
@@ -351,6 +369,17 @@ extends JavaPlugin {
     public void reloadInviteMenuConfig() {
         this.inviteMenuFile = new File(this.getDataFolder(), "invitemenu.yml");
         this.inviteMenuConfig = this.inviteMenuFile != null && this.inviteMenuFile.exists() ? YamlConfiguration.loadConfiguration((File)this.inviteMenuFile) : null;
+    }
+
+    public void reloadMessagesConfig() {
+        this.messagesFile = new File(this.getDataFolder(), "messages.yml");
+        this.messagesConfig = YamlConfiguration.loadConfiguration((File)this.messagesFile);
+        this.prefix = MrLibColors.colorize((String)this.messagesConfig.getString("MrSellChests.Prefix", "&8[&aMrSellChests&8]"));
+    }
+
+    public void reloadBoostersConfig() {
+        File boostersFile = new File(this.getDataFolder(), "boosters.yml");
+        this.boostersConfig = YamlConfiguration.loadConfiguration((File)boostersFile);
     }
 
     private void downloadBannedItemsFile() {

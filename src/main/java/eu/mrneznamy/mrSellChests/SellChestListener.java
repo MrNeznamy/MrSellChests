@@ -102,6 +102,20 @@ implements Listener {
         }
     }
 
+    private String formatTime(long seconds, String format) {
+        long days = seconds / 86400;
+        long hours = (seconds % 86400) / 3600;
+        long minutes = (seconds % 3600) / 60;
+        long secs = seconds % 60;
+
+        String result = format
+                .replace("%d", String.valueOf(days))
+                .replace("%h", String.valueOf(hours))
+                .replace("%m", String.valueOf(minutes))
+                .replace("%s", String.valueOf(secs));
+        return result;
+    }
+
     private void clearHologramCache() {
         Object object;
         Object object2 = object = this.hologramLock;
@@ -166,9 +180,27 @@ implements Listener {
                         double boosterValue = this.plugin.getSellChestManager().getTotalBooster(key);
                         long boostTime = this.plugin.getSellChestManager().getBoostTimeLeft(key);
                         String booster = String.format("%.2f", boosterValue);
+                        
+                        String timeFormat;
+                        if (boostTime >= 86400) {
+                            timeFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Days", 
+                                    this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat", "%d d %h h %m m %s s"));
+                        } else if (boostTime >= 3600) {
+                            timeFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Hours", 
+                                    "%h h %m m %s s");
+                        } else if (boostTime >= 60) {
+                            timeFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Minutes", 
+                                    "%m m %s s");
+                        } else {
+                            timeFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Seconds", 
+                                    "%s s");
+                        }
+                        
                         if (boostTime > 0L) {
+                            String formattedTime = this.formatTime(boostTime, timeFormat);
+                            
                             String timeMsg = this.plugin.getMessage("boost_time_left");
-                            timeMsg = timeMsg != null ? timeMsg.replace("[Time]", String.valueOf(boostTime)) : "&7Boost time left: " + boostTime;
+                            timeMsg = timeMsg != null ? timeMsg.replace("[Time]", formattedTime) : "&7Boost time left: " + formattedTime;
                             booster = booster + "x " + timeMsg;
                         }
                         int itemsSold = this.dbManager.getItemsSold(key);
@@ -176,17 +208,40 @@ implements Listener {
                         double moneyEarned = this.dbManager.getMoneyEarned(key);
                         int remainingSeconds = this.plugin.getSellChestManager().getRemainingSeconds(key);
                         int chargedMinutes = this.dbManager.getChestChargingMinutes(key);
+                        
+                        int chargedSeconds = this.plugin.getSellChestManager().getRemainingChargingSeconds(key);
+                        
+                        String chargedFormat;
+                        if (chargedSeconds >= 86400) {
+                            chargedFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Days", 
+                                    this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat", "%d d %h h %m m %s s"));
+                        } else if (chargedSeconds >= 3600) {
+                            chargedFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Hours", 
+                                    "%h h %m m %s s");
+                        } else if (chargedSeconds >= 60) {
+                            chargedFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Minutes", 
+                                    "%m m %s s");
+                        } else {
+                            chargedFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Seconds", 
+                                    "%s s");
+                        }
+                        String formattedCharged = this.formatTime(chargedSeconds, chargedFormat);
+                        
                         ArrayList<String> updatedLines = new ArrayList<String>();
                         for (String line : hologramLines) {
-                            String updatedLine = line.replace("[PlayerName]", ownerName).replace("[Booster]", booster).replace("[ItemsSold]", String.valueOf(itemsSold)).replace("[DeletedItems]", String.valueOf(deletedItems)).replace("[MoneyEarned]", String.format("%.2f", moneyEarned)).replace("[Interval]", String.valueOf(remainingSeconds)).replace("[Remaining]", String.valueOf(remainingSeconds)).replace("[ChargedFor]", String.valueOf(chargedMinutes));
+                            String updatedLine = line.replace("[PlayerName]", ownerName).replace("[Booster]", booster).replace("[ItemsSold]", String.valueOf(itemsSold)).replace("[DeletedItems]", String.valueOf(deletedItems)).replace("[MoneyEarned]", String.format("%.2f", moneyEarned)).replace("[Interval]", String.valueOf(remainingSeconds)).replace("[Remaining]", String.valueOf(remainingSeconds)).replace("[ChargedFor]", formattedCharged);
                             updatedLines.add(MrLibColors.colorize(updatedLine));
                         }
                         if (playerNearby && !hologramExists) {
                             this.hologramVisibility.put(holoName, true);
                             this.cleanNearbyTextDisplays(chestLoc);
                             try {
-                                double yOffset = "MrLibCore-TextDisplay".equals(this.plugin.getHologramManager().getActiveProviderName()) ? 4.5 : 1.0;
-                                double d = yOffset;
+                                double configHeight = this.plugin.getConfig().getDouble("MrSellChests.SellChests." + chestType + ".Hologram.Height", -1.0);
+                                if (configHeight == -1.0) {
+                                    configHeight = this.plugin.getConfig().getDouble("SellChests." + chestType + ".Hologram.Height", -1.0);
+                                }
+                                double yOffset = configHeight != -1.0 ? configHeight : ("MrLibCore-TextDisplay".equals(this.plugin.getHologramManager().getActiveProviderName()) ? 4.5 : 1.0);
+                                
                                 Location holoLoc = new Location(this.plugin.getServer().getWorld(parts[0]), (double)x + 0.5, (double)y + yOffset, (double)z + 0.5);
                                 if (holoLoc.getWorld() == null) continue;
                                 this.plugin.getHologramManager().createHologram(holoName, holoLoc, updatedLines);
@@ -209,8 +264,12 @@ implements Listener {
                         }
                         this.cleanNearbyTextDisplays(chestLoc);
                         try {
-                            double yOffset = "MrLibCore-TextDisplay".equals(this.plugin.getHologramManager().getActiveProviderName()) ? 4.5 : 1.0;
-                            double d = yOffset;
+                            double configHeight = this.plugin.getConfig().getDouble("MrSellChests.SellChests." + chestType + ".Hologram.Height", -1.0);
+                            if (configHeight == -1.0) {
+                                configHeight = this.plugin.getConfig().getDouble("SellChests." + chestType + ".Hologram.Height", -1.0);
+                            }
+                            double yOffset = configHeight != -1.0 ? configHeight : ("MrLibCore-TextDisplay".equals(this.plugin.getHologramManager().getActiveProviderName()) ? 4.5 : 1.0);
+                            
                             Location holoLoc = new Location(this.plugin.getServer().getWorld(parts[0]), (double)x + 0.5, (double)y + yOffset, (double)z + 0.5);
                             if (holoLoc.getWorld() == null) continue;
                             this.plugin.getHologramManager().createHologram(holoName, holoLoc, updatedLines);
@@ -558,10 +617,27 @@ implements Listener {
                 int deletedItems = this.dbManager.getDeletedItems(key);
                 double moneyEarned = this.dbManager.getMoneyEarned(key);
                 int remainingSeconds = this.plugin.getSellChestManager().getRemainingSeconds(key);
-                int chargedMinutes = this.dbManager.getChestChargingMinutes(key);
+                int chargedSeconds = this.plugin.getSellChestManager().getRemainingChargingSeconds(key);
+                
+                String chargedFormat;
+                if (chargedSeconds >= 86400) {
+                    chargedFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Days", 
+                            this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat", "%d d %h h %m m %s s"));
+                } else if (chargedSeconds >= 3600) {
+                    chargedFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Hours", 
+                            "%h h %m m %s s");
+                } else if (chargedSeconds >= 60) {
+                    chargedFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Minutes", 
+                            "%m m %s s");
+                } else {
+                    chargedFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Seconds", 
+                            "%s s");
+                }
+                String formattedCharged = this.formatTime(chargedSeconds, chargedFormat);
+
                 ArrayList<String> updatedLines = new ArrayList<String>();
                 for (String line : hologramLines) {
-                    String updatedLine = line.replace("[PlayerName]", ownerName).replace("[Booster]", booster).replace("[ItemsSold]", String.valueOf(itemsSold)).replace("[DeletedItems]", String.valueOf(deletedItems)).replace("[MoneyEarned]", String.format("%.2f", moneyEarned)).replace("[Interval]", String.valueOf(remainingSeconds)).replace("[Remaining]", String.valueOf(remainingSeconds)).replace("[ChargedFor]", String.valueOf(chargedMinutes));
+                    String updatedLine = line.replace("[PlayerName]", ownerName).replace("[Booster]", booster).replace("[ItemsSold]", String.valueOf(itemsSold)).replace("[DeletedItems]", String.valueOf(deletedItems)).replace("[MoneyEarned]", String.format("%.2f", moneyEarned)).replace("[Interval]", String.valueOf(remainingSeconds)).replace("[Remaining]", String.valueOf(remainingSeconds)).replace("[ChargedFor]", formattedCharged);
                     updatedLines.add(MrLibColors.colorize(updatedLine));
                 }
                 String holoName = "sellchest_" + parts[0] + "_" + parts[1] + "_" + parts[2] + "_" + parts[3];
@@ -569,7 +645,14 @@ implements Listener {
                 Location chestLoc = null;
                 try {
                     chestLoc = new Location(Bukkit.getWorld((String)parts[0]), Double.parseDouble(parts[1]) + 0.5, Double.parseDouble(parts[2]) + 0.5, Double.parseDouble(parts[3]) + 0.5);
-                    worldLoc = new Location(Bukkit.getWorld((String)parts[0]), Double.parseDouble(parts[1]) + 0.5, Double.parseDouble(parts[2]) + ("MrLibCore-TextDisplay".equals(this.plugin.getHologramManager().getActiveProviderName()) ? 2.5 : 4.5), Double.parseDouble(parts[3]) + 0.5);
+                    
+                    double configHeight = this.plugin.getConfig().getDouble("MrSellChests.SellChests." + chestType + ".Hologram.Height", -1.0);
+                    if (configHeight == -1.0) {
+                        configHeight = this.plugin.getConfig().getDouble("SellChests." + chestType + ".Hologram.Height", -1.0);
+                    }
+                    double yOffset = configHeight != -1.0 ? configHeight : ("MrLibCore-TextDisplay".equals(this.plugin.getHologramManager().getActiveProviderName()) ? 4.5 : 1.0);
+                    
+                    worldLoc = new Location(Bukkit.getWorld((String)parts[0]), Double.parseDouble(parts[1]) + 0.5, Double.parseDouble(parts[2]) + yOffset, Double.parseDouble(parts[3]) + 0.5);
                 }
                 catch (Exception exception) {
                     // empty catch block
