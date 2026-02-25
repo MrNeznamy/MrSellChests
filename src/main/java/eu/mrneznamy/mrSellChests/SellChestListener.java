@@ -319,9 +319,7 @@ implements Listener {
                             break;
                         }
                         Block block = event.getBlockPlaced();
-                        File dataFile = new File(this.plugin.getDataFolder(), "data.yml");
-                        YamlConfiguration data = YamlConfiguration.loadConfiguration((File)dataFile);
-                        for (String existingKey : data.getKeys(false)) {
+                        for (String existingKey : this.dbManager.getAllChestKeys()) {
                             String[] parts = existingKey.split(":");
                             if (parts.length != 4) continue;
                             String world = parts[0];
@@ -742,9 +740,7 @@ implements Listener {
             Container destContainer = (Container)destination.getHolder();
             Location destLoc = destContainer.getLocation();
             String destKey = destLoc.getWorld().getName() + ":" + destLoc.getBlockX() + ":" + destLoc.getBlockY() + ":" + destLoc.getBlockZ();
-            File dataFile = new File(this.plugin.getDataFolder(), "data.yml");
-            YamlConfiguration data = YamlConfiguration.loadConfiguration((File)dataFile);
-            if (data.contains(destKey)) {
+            if (this.dbManager.chestExists(destKey)) {
                 ItemStack itemToMove = event.getItem();
                 if (itemToMove != null) {
                     if (Commands.isItemBanned(itemToMove, "INV", this.plugin)) {

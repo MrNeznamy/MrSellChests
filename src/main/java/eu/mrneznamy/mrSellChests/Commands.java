@@ -91,11 +91,19 @@ implements CommandExecutor {
                 }
                 return true;
             }
+            if (args.length == 1) {
+                if (sender instanceof Player) {
+                    this.plugin.getSellChestManager().openAdminMenu((Player) sender, 1);
+                    return true;
+                }
+                sender.sendMessage("This command is only for players!");
+                return true;
+            }
             if (args.length >= 3 && args[1].equalsIgnoreCase("import") && args[2].equalsIgnoreCase("VoidChest")) {
                 new VoidChestImporter(this.plugin).importVoidChests(sender);
                 return true;
             }
-            sender.sendMessage(MrLibColors.colorize("&cUsage: /msc admin import VoidChest"));
+            sender.sendMessage(MrLibColors.colorize("&cUsage: /msc admin [import VoidChest]"));
             return true;
         }
         if (args[0].equalsIgnoreCase("reload")) {

@@ -245,9 +245,9 @@ public class SellChestsDatabaseManager {
         saveBoostersYaml();
     }
 
-    public Set<String> getAllChestKeys() {
+    public List<String> getAllChestKeys() {
         if (isUsingDatabase()) {
-            Set<String> result = new HashSet<>();
+            List<String> result = new ArrayList<>();
             try (Connection conn = dataSource.getConnection();
                  PreparedStatement ps = conn.prepareStatement("SELECT chest_key FROM sell_chests");
                  ResultSet rs = ps.executeQuery()) {
@@ -259,10 +259,10 @@ public class SellChestsDatabaseManager {
             }
             return result;
         }
-        return this.dataYaml.getKeys(false);
+        return new ArrayList<>(this.dataYaml.getKeys(false));
     }
 
-    public CompletableFuture<Set<String>> getAllChestKeysAsync() {
+    public CompletableFuture<List<String>> getAllChestKeysAsync() {
         return CompletableFuture.supplyAsync(this::getAllChestKeys);
     }
 
@@ -1524,5 +1524,37 @@ public class SellChestsDatabaseManager {
 
     public CompletableFuture<Void> setChestTempBoostAsync(String chestKey, double value, long until) {
         return CompletableFuture.runAsync(() -> setChestTempBoost(chestKey, value, until));
+    }
+
+    public void removeChest(String chestKey) {
+        if (isUsingDatabase()) {
+            try (Connection conn = dataSource.getConnection()) {
+                // Delete from sell_chests
+                try (PreparedStatement ps = conn.prepareStatement("DELETE FROM sell_chests WHERE chest_key = ?")) {
+                    ps.setString(1, chestKey);
+                    ps.executeUpdate();
+                }
+                // Delete from chest_statistics
+                try (PreparedStatement ps = conn.prepareStatement("DELETE FROM chest_statistics WHERE chest_key = ?")) {
+                    ps.setString(1, chestKey);
+                    ps.executeUpdate();
+                }
+                // Delete from chest_inventory
+                try (PreparedStatement ps = conn.prepareStatement("DELETE FROM chest_inventory WHERE chest_key = ?")) {
+                    ps.setString(1, chestKey);
+                    ps.executeUpdate();
+                }
+                // Delete from chest_invited_players
+                try (PreparedStatement ps = conn.prepareStatement("DELETE FROM chest_invited_players WHERE chest_key = ?")) {
+                    ps.setString(1, chestKey);
+                    ps.executeUpdate();
+                }
+            } catch (SQLException e) {
+                e.printStackTrace();
+            }
+        } else {
+            this.dataYaml.set(chestKey, null);
+            this.saveDataYaml();
+        }
     }
 }

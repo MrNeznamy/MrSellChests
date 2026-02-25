@@ -150,17 +150,22 @@ extends JavaPlugin {
     }
 
     public String getMessage(String path) {
-        File messagesFile = new File(this.getDataFolder(), "messages.yml");
-        if (messagesFile.exists()) {
-            YamlConfiguration messages = YamlConfiguration.loadConfiguration((File)messagesFile);
-            String message = messages.getString("MrSellChests." + path);
+        if (this.messagesConfig == null) {
+            File messagesFile = new File(this.getDataFolder(), "messages.yml");
+            if (messagesFile.exists()) {
+                this.messagesConfig = YamlConfiguration.loadConfiguration(messagesFile);
+            }
+        }
+        
+        if (this.messagesConfig != null) {
+            String message = this.messagesConfig.getString("MrSellChests." + path);
             if (message != null) {
                 if (message.contains("(!message!)")) {
                     message = message.replace("(!message!)", "");
                 }
                 return MrLibColors.colorize((String)message);
             }
-            message = messages.getString(path);
+            message = this.messagesConfig.getString(path);
             if (message != null) {
                 if (message.contains("(!message!)")) {
                     message = message.replace("(!message!)", "");
@@ -172,17 +177,22 @@ extends JavaPlugin {
     }
 
     public String getMessage(String path, String defaultValue) {
-        File messagesFile = new File(this.getDataFolder(), "messages.yml");
-        if (messagesFile.exists()) {
-            YamlConfiguration messages = YamlConfiguration.loadConfiguration((File)messagesFile);
-            String message = messages.getString("MrSellChests." + path);
+        if (this.messagesConfig == null) {
+            File messagesFile = new File(this.getDataFolder(), "messages.yml");
+            if (messagesFile.exists()) {
+                this.messagesConfig = YamlConfiguration.loadConfiguration(messagesFile);
+            }
+        }
+        
+        if (this.messagesConfig != null) {
+            String message = this.messagesConfig.getString("MrSellChests." + path);
             if (message != null) {
                 if (message.contains("(!message!)")) {
                     message = message.replace("(!message!)", "");
                 }
                 return MrLibColors.colorize((String)message);
             }
-            message = messages.getString(path);
+            message = this.messagesConfig.getString(path);
             if (message != null) {
                 if (message.contains("(!message!)")) {
                     message = message.replace("(!message!)", "");

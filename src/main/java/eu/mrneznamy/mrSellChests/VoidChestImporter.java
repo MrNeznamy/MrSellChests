@@ -109,9 +109,18 @@ public class VoidChestImporter {
                 
                 config.set(path + ".Chest.Charging.Enabled", chargeEnabled);
                 if (chargeEnabled) {
+                    config.set(path + ".Chest.Type", "CHARGING"); // Set Type explicitly as requested
                     config.set(path + ".Chest.Charging.PriceForCharge", chargePrice);
                     config.set(path + ".Chest.Charging.PerUpgrade", perUpgradeSeconds > 0 ? perUpgradeSeconds : 60);
                     config.set(path + ".Chest.Charging.MaxMinutes", maxTimeMinutes > 0 ? maxTimeMinutes : 1440);
+                } else {
+                    config.set(path + ".Chest.Type", "TIME"); // Default to TIME or SELL if not charging? Or just leave it?
+                    // User showed "Type: TIME" in config, so it's a valid type.
+                    // If we don't know, maybe default to "SELL" or "TIME".
+                    // Let's set it to "TIME" for now if not charging, or just omit if unknown.
+                    // Actually, if chargeEnabled is false, we probably shouldn't force a type unless we know it.
+                    // But to be safe for non-charging chests to NOT be treated as charging, setting something else helps.
+                    config.set(path + ".Chest.Type", "TIME");
                 }
                 
                 config.set(path + ".Item.Name", itemName);

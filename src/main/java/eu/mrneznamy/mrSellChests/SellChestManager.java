@@ -269,7 +269,7 @@ public class SellChestManager {
 
     private void loadAllChests() {
         SellChestsDatabaseManager databaseManager = this.plugin.getDatabaseManager();
-        Set<String> chestKeys = databaseManager.getAllChestKeys();
+        List<String> chestKeys = databaseManager.getAllChestKeys();
         for (BukkitTask task : this.collectorTasks.values()) {
             task.cancel();
         }
@@ -400,7 +400,7 @@ public class SellChestManager {
             for (String key : this.chestInventories.keySet()) {
                 try {
                     String chestType = this.chestTypes.computeIfAbsent(key, k -> dbManager.getChestType((String)k));
-                    boolean isCharging = "Charging".equalsIgnoreCase(chestType) || this.plugin.getConfig().getBoolean("MrSellChests.SellChests." + chestType + ".Chest.Charging.Enabled", false);
+                    boolean isCharging = this.isChargingChest(chestType);
                     
                     if (!isCharging) continue;
                     
@@ -600,7 +600,7 @@ public class SellChestManager {
             if (chestType == null) {
                 return;
             }
-            boolean isCharging = "Charging".equalsIgnoreCase(chestType) || this.plugin.getConfig().getBoolean("MrSellChests.SellChests." + chestType + ".Chest.Charging.Enabled", false);
+            boolean isCharging = this.isChargingChest(chestType);
             if (isCharging && (currentCharge = dbManager.getChestChargingMinutes(key)) <= 0) {
                 this.lastSellTimes.put(key, System.currentTimeMillis());
                 return;
@@ -743,20 +743,6 @@ public class SellChestManager {
         return remainingSeconds;
     }
 
-    public void removeChest(String key) {
-        BukkitTask collectorTask;
-        this.chestInventories.remove(key);
-        BukkitTask task = this.sellTasks.remove(key);
-        if (task != null) {
-            task.cancel();
-        }
-        if ((collectorTask = this.collectorTasks.remove(key)) != null) {
-            collectorTask.cancel();
-        }
-        this.sellIntervals.remove(key);
-        this.lastSellTimes.remove(key);
-    }
-
     private void startMenuUpdateTask() {
         this.createTask(() -> {
             for (Map.Entry<UUID, String> entry : new HashMap<>(this.openMenus).entrySet()) {
@@ -865,7 +851,7 @@ public class SellChestManager {
             for (String itemKey : config.getConfigurationSection("MrSellChests.SettingsMenu.items").getKeys(false)) {
                 String path = "MrSellChests.SettingsMenu.items." + itemKey;
                 int slot = config.getInt(path + ".slot", 0);
-                boolean isCharging = "Charging".equalsIgnoreCase(chestType) || config.getBoolean("MrSellChests.SellChests." + chestType + ".Chest.Charging.Enabled", false);
+                boolean isCharging = this.isChargingChest(chestType);
                 if (itemKey.equals("charge_chest") && !isCharging) continue;
                 
                 if (itemKey.equals("trasher")) {
@@ -1029,7 +1015,7 @@ public class SellChestManager {
             for (String itemKey : config.getConfigurationSection("MrSellChests.SettingsMenu.items").getKeys(false)) {
                 String path = "MrSellChests.SettingsMenu.items." + itemKey;
                 int slot = config.getInt(path + ".slot", 0);
-                boolean isCharging = "Charging".equalsIgnoreCase(chestType) || config.getBoolean("MrSellChests.SellChests." + chestType + ".Chest.Charging.Enabled", false);
+                boolean isCharging = this.isChargingChest(chestType);
                 if (itemKey.equals("charge_chest") && !isCharging) continue;
                 if (itemKey.equals("trasher")) {
                     String linkMaterialStr;
@@ -1185,7 +1171,7 @@ public class SellChestManager {
             }
             case "charge_chest": {
                 String chestType = this.plugin.getDatabaseManager().getChestType(chestKey);
-                boolean isCharging = "Charging".equalsIgnoreCase(chestType) || config.getBoolean("MrSellChests.SellChests." + chestType + ".Chest.Charging.Enabled", false);
+                boolean isCharging = this.isChargingChest(chestType);
                 if (isCharging) {
                     int maxCharge;
                     int currentChargeMinutes = this.plugin.getDatabaseManager().getChestChargingMinutes(chestKey);
@@ -1764,11 +1750,158 @@ public class SellChestManager {
         return 0L;
     }
 
+    private boolean isChargingChest(String chestType) {
+        if (chestType == null) return false;
+        FileConfiguration config = this.plugin.getConfig();
+        String path = "MrSellChests.SellChests." + chestType + ".Chest.Type";
+        String type = config.getString(path);
+        return "CHARGING".equalsIgnoreCase(type);
+    }
+
     private static class SellMessageData {
         double totalEarned = 0.0;
         long lastReset = System.currentTimeMillis();
 
         private SellMessageData() {
+        }
+    }
+
+    public void openAdminMenu(Player player, int page) {
+        List<String> allKeys = new ArrayList<>(this.plugin.getDatabaseManager().getAllChestKeys());
+        // Filter out invalid keys (like PlayerBoosts or non-location keys)
+        allKeys.removeIf(key -> {
+            if (key.equals("PlayerBoosts")) return true;
+            String[] parts = key.split(":");
+            return parts.length != 4;
+        });
+        
+        int totalChests = allKeys.size();
+        int itemsPerPage = 45;
+        int totalPages = (int) Math.ceil((double) totalChests / itemsPerPage);
+        
+        if (page < 1) page = 1;
+        if (page > totalPages && totalPages > 0) page = totalPages;
+        
+        MrLibGUI gui = new MrLibGUI(MrLibColors.colorize("&8Admin Sell Chests - Page " + page), 6);
+        
+        int startIndex = (page - 1) * itemsPerPage;
+        int endIndex = Math.min(startIndex + itemsPerPage, totalChests);
+        
+        for (int i = startIndex; i < endIndex; i++) {
+            String key = allKeys.get(i);
+            String owner = this.plugin.getDatabaseManager().getChestOwner(key);
+            String type = this.plugin.getDatabaseManager().getChestType(key);
+            String[] parts = key.split(":");
+            String locationStr = "Unknown";
+            if (parts.length == 4) {
+                locationStr = parts[0] + ", " + parts[1] + ", " + parts[2] + ", " + parts[3];
+            }
+            
+            boolean isBroken = type == null || owner == null;
+            String itemName = isBroken ? "&c&lBROKEN CHEST" : "&e" + type;
+            List<String> lore = new ArrayList<>();
+            lore.add("&7Owner: &f" + (owner != null ? owner : "&cUnknown"));
+            lore.add("&7Location: &f" + locationStr);
+            lore.add("");
+            lore.add("&eLeft-Click &7to teleport");
+            lore.add("&cRight-Click &7to remove" + (isBroken ? " (Force Delete)" : ""));
+            
+            ItemStack item = new MrLibItemBuilder(isBroken ? Material.BARRIER : Material.CHEST)
+                    .setName(itemName)
+                    .setLore(lore)
+                    .build();
+            
+            gui.setItem(i - startIndex, item, event -> {
+                if (event.isLeftClick()) {
+                    if (parts.length == 4) {
+                        World world = Bukkit.getWorld(parts[0]);
+                        if (world != null) {
+                            Location loc = new Location(world, Double.parseDouble(parts[1]) + 0.5, Double.parseDouble(parts[2]) + 1, Double.parseDouble(parts[3]) + 0.5);
+                            player.teleport(loc);
+                            player.sendMessage(MrLibColors.colorize("&aTeleported to Sell Chest."));
+                        } else {
+                            player.sendMessage(MrLibColors.colorize("&cWorld not found!"));
+                        }
+                    }
+                } else if (event.isRightClick()) {
+                    String chestType = this.plugin.getDatabaseManager().getChestType(key);
+                    
+                    this.removeChest(key);
+                    
+                    if (chestType != null) {
+                        ItemStack dropItem = createSellChestItem(chestType);
+                        
+                        HashMap<Integer, ItemStack> leftover = player.getInventory().addItem(dropItem);
+                        if (!leftover.isEmpty()) {
+                            player.getWorld().dropItemNaturally(player.getLocation(), leftover.get(0));
+                            player.sendMessage(MrLibColors.colorize("&aSell Chest removed and dropped at your feet (inventory full)."));
+                        } else {
+                            player.sendMessage(MrLibColors.colorize("&aSell Chest removed and added to your inventory."));
+                        }
+                    } else {
+                        player.sendMessage(MrLibColors.colorize("&cBroken Sell Chest force removed (no item given)."));
+                    }
+                    
+                    openAdminMenu(player, 1); // Refresh menu
+                }
+            });
+        }
+        
+        // Navigation buttons
+        if (page > 1) {
+            int prevPage = page - 1;
+            gui.setItem(45, new MrLibItemBuilder(Material.ARROW).setName("&ePrevious Page").build(), event -> openAdminMenu(player, prevPage));
+        }
+        
+        if (page < totalPages) {
+            int nextPage = page + 1;
+            gui.setItem(53, new MrLibItemBuilder(Material.ARROW).setName("&eNext Page").build(), event -> openAdminMenu(player, nextPage));
+        }
+        
+        gui.setItem(49, new MrLibItemBuilder(Material.BARRIER).setName("&cClose").build(), event -> player.closeInventory());
+        
+        gui.open(player);
+    }
+
+    public void removeChest(String chestKey) {
+        String cleanKey = chestKey.endsWith(":") ? chestKey.substring(0, chestKey.length() - 1) : chestKey;
+        String[] parts = cleanKey.split(":");
+        if (parts.length == 4) {
+            // Remove hologram
+            String holoName = "sellchest_" + parts[0] + "_" + parts[1] + "_" + parts[2] + "_" + parts[3];
+            this.plugin.getHologramManager().deleteHologram(holoName);
+            
+            // Get chest type and location for dropping item
+            String type = this.plugin.getDatabaseManager().getChestType(chestKey);
+            
+            // Remove from DB
+            this.plugin.getDatabaseManager().removeChest(chestKey); 
+            
+            // Also remove from cache
+            this.chestInventories.remove(chestKey);
+            this.sellIntervals.remove(chestKey);
+            this.lastSellTimes.remove(chestKey);
+            this.chestTypes.remove(chestKey);
+            this.chargingSecondsCache.remove(chestKey);
+            
+            // Stop tasks
+            BukkitTask task = this.sellTasks.remove(chestKey);
+            if (task != null) task.cancel();
+            
+            BukkitTask colTask = this.collectorTasks.remove(chestKey);
+            if (colTask != null) colTask.cancel();
+            
+            // Remove block
+            try {
+                World world = Bukkit.getWorld(parts[0]);
+                if (world != null) {
+                    Location loc = new Location(world, Double.parseDouble(parts[1]), Double.parseDouble(parts[2]), Double.parseDouble(parts[3]));
+                    Block block = world.getBlockAt(loc);
+                    if (block.getType() != Material.AIR) {
+                        block.setType(Material.AIR);
+                    }
+                }
+            } catch (Exception ignored) {}
         }
     }
 }
