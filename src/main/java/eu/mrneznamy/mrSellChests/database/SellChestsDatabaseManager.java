@@ -1250,7 +1250,6 @@ public class SellChestsDatabaseManager {
         return CompletableFuture.supplyAsync(() -> isCollectorEnabled(chestKey));
     }
 
-    // This method seems missing in original but needed for consistency if used
     public List<String> getLinkedChests(String chestKey) {
          if (isUsingDatabase()) {
             List<String> linkedChests = new ArrayList<>();
@@ -1529,22 +1528,18 @@ public class SellChestsDatabaseManager {
     public void removeChest(String chestKey) {
         if (isUsingDatabase()) {
             try (Connection conn = dataSource.getConnection()) {
-                // Delete from sell_chests
                 try (PreparedStatement ps = conn.prepareStatement("DELETE FROM sell_chests WHERE chest_key = ?")) {
                     ps.setString(1, chestKey);
                     ps.executeUpdate();
                 }
-                // Delete from chest_statistics
                 try (PreparedStatement ps = conn.prepareStatement("DELETE FROM chest_statistics WHERE chest_key = ?")) {
                     ps.setString(1, chestKey);
                     ps.executeUpdate();
                 }
-                // Delete from chest_inventory
                 try (PreparedStatement ps = conn.prepareStatement("DELETE FROM chest_inventory WHERE chest_key = ?")) {
                     ps.setString(1, chestKey);
                     ps.executeUpdate();
                 }
-                // Delete from chest_invited_players
                 try (PreparedStatement ps = conn.prepareStatement("DELETE FROM chest_invited_players WHERE chest_key = ?")) {
                     ps.setString(1, chestKey);
                     ps.executeUpdate();

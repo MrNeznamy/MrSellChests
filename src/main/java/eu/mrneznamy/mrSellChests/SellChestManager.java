@@ -45,20 +45,21 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.Plugin;
+import eu.mrneznamy.mrlibcore.scheduler.MrLibScheduler;
 import org.bukkit.scheduler.BukkitTask;
 
 public class SellChestManager {
     private final MrSellChests plugin;
     private final Map<String, Inventory> chestInventories;
-    private final Map<String, BukkitTask> sellTasks;
-    private BukkitTask sellTask;
+    private final Map<String, MrLibScheduler.MrLibTask> sellTasks;
+    private MrLibScheduler.MrLibTask sellTask;
     private final Map<String, Integer> sellIntervals;
     private final Map<Material, Double> itemPrices;
     private final Map<String, Long> lastSellTimes;
     private final Map<UUID, SellMessageData> playerSellData;
-    private final Map<String, BukkitTask> collectorTasks;
-    private BukkitTask sellMessageTask;
-    private BukkitTask chargingTask;
+    private final Map<String, MrLibScheduler.MrLibTask> collectorTasks;
+    private MrLibScheduler.MrLibTask sellMessageTask;
+    private MrLibScheduler.MrLibTask chargingTask;
     private final Map<String, String> chestTypes = new HashMap<String, String>();
     private final Map<String, FileConfiguration> configCache = new HashMap<String, FileConfiguration>();
     private StackerHandler roseStackerIntegration;
@@ -76,12 +77,12 @@ public class SellChestManager {
             }
         }
         this.chestInventories = new HashMap<String, Inventory>();
-        this.sellTasks = new HashMap<String, BukkitTask>();
+        this.sellTasks = new HashMap<String, MrLibScheduler.MrLibTask>();
         this.sellIntervals = new HashMap<String, Integer>();
         this.itemPrices = new HashMap<Material, Double>();
         this.lastSellTimes = new HashMap<String, Long>();
         this.playerSellData = new HashMap<UUID, SellMessageData>();
-        this.collectorTasks = new HashMap<String, BukkitTask>();
+        this.collectorTasks = new HashMap<String, MrLibScheduler.MrLibTask>();
         this.loadPrices();
         this.loadAllChests();
         this.startSellTasks();
@@ -90,17 +91,11 @@ public class SellChestManager {
         this.startMenuUpdateTask();
     }
 
-    private BukkitTask createTask(Runnable runnable, long delay, long period, boolean async) {
+    private MrLibScheduler.MrLibTask createTask(Runnable runnable, long delay, long period, boolean async) {
         if (async) {
-            try {
-                Method asyncMethod = Bukkit.getScheduler().getClass().getMethod("runTaskTimerAsync", Plugin.class, Runnable.class, Long.TYPE, Long.TYPE);
-                return (BukkitTask)asyncMethod.invoke((Object)Bukkit.getScheduler(), new Object[]{this.plugin, runnable, delay, period});
-            }
-            catch (Exception e) {
-                return Bukkit.getScheduler().runTaskTimerAsynchronously((Plugin)this.plugin, runnable, delay, period);
-            }
+            return MrLibScheduler.runTaskTimerAsynchronously((Plugin)this.plugin, runnable, delay, period);
         }
-        return Bukkit.getScheduler().runTaskTimer((Plugin)this.plugin, runnable, delay, period);
+        return MrLibScheduler.runTaskTimer((Plugin)this.plugin, runnable, delay, period);
     }
 
     private void startSellMessageTask() {
@@ -270,7 +265,7 @@ public class SellChestManager {
     private void loadAllChests() {
         SellChestsDatabaseManager databaseManager = this.plugin.getDatabaseManager();
         List<String> chestKeys = databaseManager.getAllChestKeys();
-        for (BukkitTask task : this.collectorTasks.values()) {
+        for (MrLibScheduler.MrLibTask task : this.collectorTasks.values()) {
             task.cancel();
         }
         this.collectorTasks.clear();
@@ -296,7 +291,7 @@ public class SellChestManager {
                     }
                 }
                 if (!(collectorEnabled = databaseManager.getChestCollectorEnabled(key)) || Bukkit.getWorld((String)parts[0]) == null) continue;
-                Bukkit.getScheduler().runTaskLater((Plugin)this.plugin, () -> this.startCollectorTask(key, parts, chestType), 40L);
+                MrLibScheduler.runTaskLater((Plugin)this.plugin, () -> this.startCollectorTask(key, parts, chestType), 40L);
             }
             catch (Exception e) {
                 e.printStackTrace();
@@ -309,7 +304,7 @@ public class SellChestManager {
             int collectorInterval;
             String chestConfigPath;
             FileConfiguration pluginConfig;
-            BukkitTask existingTask = this.collectorTasks.remove(key);
+            MrLibScheduler.MrLibTask existingTask = this.collectorTasks.remove(key);
             if (existingTask != null) {
                 existingTask.cancel();
             }
@@ -320,14 +315,14 @@ public class SellChestManager {
                 collectorInterval = sellInterval / 2;
             }
             Location loc = new Location(Bukkit.getWorld((String)locationParts[0]), Double.parseDouble(locationParts[1]), Double.parseDouble(locationParts[2]), Double.parseDouble(locationParts[3]));
-            BukkitTask task = this.createTask(() -> {
+            MrLibScheduler.MrLibTask task = MrLibScheduler.runTaskTimerForRegion((Plugin)this.plugin, loc, () -> {
                 try {
                     if (!loc.getChunk().isLoaded()) {
                         return;
                     }
                     SellChestsDatabaseManager dbManager = this.plugin.getDatabaseManager();
                     if (!dbManager.chestExists(key) || dbManager.getChestType(key) == null || !dbManager.isCollectorEnabled(key)) {
-                        BukkitTask currentTask = this.collectorTasks.remove(key);
+                        MrLibScheduler.MrLibTask currentTask = this.collectorTasks.remove(key);
                         if (currentTask != null) {
                             currentTask.cancel();
                         }
@@ -367,7 +362,7 @@ public class SellChestManager {
                 catch (Exception e) {
                     e.printStackTrace();
                 }
-            }, 20L * (long)collectorInterval, Math.max(100L, 20L * (long)collectorInterval), false);
+            }, 20L * (long)collectorInterval, Math.max(100L, 20L * (long)collectorInterval));
             this.collectorTasks.put(key, task);
             SellChestsDatabaseManager dbManager = this.plugin.getDatabaseManager();
             dbManager.setCollectorTaskId(key, task.getTaskId());
@@ -448,7 +443,7 @@ public class SellChestManager {
         }
         SellChestsDatabaseManager dbManager = this.plugin.getDatabaseManager();
         if (!dbManager.chestExists(chestKey) || dbManager.getChestType(chestKey) == null) {
-            BukkitTask task = this.collectorTasks.remove(chestKey);
+            MrLibScheduler.MrLibTask task = this.collectorTasks.remove(chestKey);
             if (task != null) {
                 task.cancel();
             }
@@ -467,11 +462,13 @@ public class SellChestManager {
         if ((itemPrice = this.getItemPrice(item, player)) > 0.0) {
             Inventory sellInv2 = this.getChestInventory(chestKey);
             if (sellInv2 != null) {
+                synchronized (sellInv2) {
                 int remaining = this.addItemsToInventory(sellInv2, item, amount);
                 if (amount - remaining > 0) {
                      // this.plugin.getLogger().info("Added " + (amount - remaining) + " of " + item.getType() + " to chest " + chestKey + ". Price: " + itemPrice);
                 }
                 return remaining;
+                }
             }
             return amount;
         }
@@ -555,23 +552,28 @@ public class SellChestManager {
         if (inv == null) {
             return;
         }
-        boolean hasChanges = false;
-        for (int i = 0; i < inv.getSize(); ++i) {
-            ItemStack item = inv.getItem(i);
-            ItemStack currentItem = dbManager.getInventoryItem(key, i);
-            if (item != null && item.getType() != Material.AIR) {
-                if (item.equals((Object)currentItem)) continue;
-                dbManager.setInventoryItem(key, i, item);
+        synchronized (inv) {
+            boolean hasChanges = false;
+            for (int i = 0; i < inv.getSize(); ++i) {
+                ItemStack item = inv.getItem(i);
+                ItemStack currentItem = dbManager.getInventoryItem(key, i);
+                if (item != null && item.getType() != Material.AIR) {
+                    if (item.equals((Object)currentItem)) continue;
+                    dbManager.setInventoryItem(key, i, item);
+                    hasChanges = true;
+                    continue;
+                }
+                if (currentItem == null) continue;
+                dbManager.setInventoryItem(key, i, null);
                 hasChanges = true;
-                continue;
             }
-            if (currentItem == null) continue;
-            dbManager.setInventoryItem(key, i, null);
-            hasChanges = true;
         }
     }
 
     private void sellInventory(String key) {
+        if (!this.plugin.getEconomy().isEnabled()) {
+            return;
+        }
         try {
             ItemStack item;
             int i;
@@ -615,6 +617,7 @@ public class SellChestManager {
                     return;
                 }
             }
+            synchronized (inv) {
             double totalEarnings = 0.0;
             int itemsSold = 0;
             int itemsDeleted = 0;
@@ -703,6 +706,7 @@ public class SellChestManager {
                 }
                 this.saveChestInventory(key);
             }
+            }
             this.lastSellTimes.put(key, System.currentTimeMillis());
         }
         catch (Exception e) {
@@ -710,7 +714,7 @@ public class SellChestManager {
         }
     }
 
-    public BukkitTask getSellTask(String key) {
+    public MrLibScheduler.MrLibTask getSellTask(String key) {
         return this.sellTasks.get(key);
     }
 
@@ -1315,7 +1319,7 @@ public class SellChestManager {
 
     private void handleChunkCollectorToggle(Player player, String chestKey, MrLibGUI gui) {
         if (!Bukkit.isPrimaryThread()) {
-            Bukkit.getScheduler().runTask((Plugin)this.plugin, () -> this.handleChunkCollectorToggle(player, chestKey, gui));
+            MrLibScheduler.runTask((Plugin)this.plugin, () -> this.handleChunkCollectorToggle(player, chestKey, gui));
             return;
         }
         boolean currentCollector = this.plugin.getDatabaseManager().getChestCollectorEnabled(chestKey);
@@ -1328,7 +1332,7 @@ public class SellChestManager {
                 this.startCollectorTask(chestKey, parts, chestType);
             }
         } else {
-            BukkitTask task = this.collectorTasks.remove(chestKey);
+            MrLibScheduler.MrLibTask task = this.collectorTasks.remove(chestKey);
             if (task != null) {
                 task.cancel();
             }
@@ -1351,11 +1355,11 @@ public class SellChestManager {
     }
 
     public void shutdown() {
-        for (BukkitTask bukkitTask : this.sellTasks.values()) {
+        for (MrLibScheduler.MrLibTask bukkitTask : this.sellTasks.values()) {
             bukkitTask.cancel();
         }
         this.sellTasks.clear();
-        for (BukkitTask bukkitTask : this.collectorTasks.values()) {
+        for (MrLibScheduler.MrLibTask bukkitTask : this.collectorTasks.values()) {
             bukkitTask.cancel();
         }
         this.collectorTasks.clear();
@@ -1470,7 +1474,7 @@ public class SellChestManager {
                 this.startCollectorTask(chestKey, parts, chestType);
             }
         } else {
-            BukkitTask task = this.collectorTasks.remove(chestKey);
+            MrLibScheduler.MrLibTask task = this.collectorTasks.remove(chestKey);
             if (task != null) {
                 task.cancel();
             }
@@ -1768,7 +1772,6 @@ public class SellChestManager {
 
     public void openAdminMenu(Player player, int page) {
         List<String> allKeys = new ArrayList<>(this.plugin.getDatabaseManager().getAllChestKeys());
-        // Filter out invalid keys (like PlayerBoosts or non-location keys)
         allKeys.removeIf(key -> {
             if (key.equals("PlayerBoosts")) return true;
             String[] parts = key.split(":");
@@ -1842,12 +1845,11 @@ public class SellChestManager {
                         player.sendMessage(MrLibColors.colorize("&cBroken Sell Chest force removed (no item given)."));
                     }
                     
-                    openAdminMenu(player, 1); // Refresh menu
+                    openAdminMenu(player, 1); 
                 }
             });
         }
         
-        // Navigation buttons
         if (page > 1) {
             int prevPage = page - 1;
             gui.setItem(45, new MrLibItemBuilder(Material.ARROW).setName("&ePrevious Page").build(), event -> openAdminMenu(player, prevPage));
@@ -1867,31 +1869,25 @@ public class SellChestManager {
         String cleanKey = chestKey.endsWith(":") ? chestKey.substring(0, chestKey.length() - 1) : chestKey;
         String[] parts = cleanKey.split(":");
         if (parts.length == 4) {
-            // Remove hologram
             String holoName = "sellchest_" + parts[0] + "_" + parts[1] + "_" + parts[2] + "_" + parts[3];
             this.plugin.getHologramManager().deleteHologram(holoName);
             
-            // Get chest type and location for dropping item
             String type = this.plugin.getDatabaseManager().getChestType(chestKey);
             
-            // Remove from DB
             this.plugin.getDatabaseManager().removeChest(chestKey); 
             
-            // Also remove from cache
             this.chestInventories.remove(chestKey);
             this.sellIntervals.remove(chestKey);
             this.lastSellTimes.remove(chestKey);
             this.chestTypes.remove(chestKey);
             this.chargingSecondsCache.remove(chestKey);
             
-            // Stop tasks
-            BukkitTask task = this.sellTasks.remove(chestKey);
+            MrLibScheduler.MrLibTask task = this.sellTasks.remove(chestKey);
             if (task != null) task.cancel();
             
-            BukkitTask colTask = this.collectorTasks.remove(chestKey);
+            MrLibScheduler.MrLibTask colTask = this.collectorTasks.remove(chestKey);
             if (colTask != null) colTask.cancel();
             
-            // Remove block
             try {
                 World world = Bukkit.getWorld(parts[0]);
                 if (world != null) {

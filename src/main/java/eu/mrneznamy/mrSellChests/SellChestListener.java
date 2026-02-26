@@ -3,12 +3,14 @@ package eu.mrneznamy.mrSellChests;
 import eu.mrneznamy.mrSellChests.Commands;
 import eu.mrneznamy.mrSellChests.MrSellChests;
 import eu.mrneznamy.mrSellChests.database.SellChestsDatabaseManager;
+import eu.mrneznamy.mrlibcore.scheduler.MrLibScheduler;
 import eu.mrneznamy.mrlibcore.utils.MrLibColors;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.OpenOption;
 import java.util.ArrayList;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -53,23 +55,22 @@ implements Listener {
     private final MrSellChests plugin;
     private final SellChestsDatabaseManager dbManager;
     private final Map<UUID, String> linkingPlayers;
-    private BukkitTask hologramUpdateTask;
-    private final Map<String, List<String>> hologramCache = new HashMap<String, List<String>>();
-    private final Object hologramLock = new Object();
-    private final Map<String, Boolean> hologramVisibility = new HashMap<String, Boolean>();
-    private final Map<String, Boolean> hologramManuallyDisabled = new HashMap<String, Boolean>();
+    private MrLibScheduler.MrLibTask hologramUpdateTask;
+    private final Map<String, List<String>> hologramCache = new ConcurrentHashMap<>();
+    private final Map<String, Boolean> hologramVisibility = new ConcurrentHashMap<>();
+    private final Map<String, Boolean> hologramManuallyDisabled = new ConcurrentHashMap<>();
     private static final double HOLOGRAM_VIEW_DISTANCE = 20.0;
-    private final Map<UUID, String> inviteChestKey = new HashMap<UUID, String>();
-    private final Map<UUID, String> invitePlayerName = new HashMap<UUID, String>();
-    private final Map<UUID, SellChestInviteStep> inviteStep = new HashMap<UUID, SellChestInviteStep>();
-    private final Map<UUID, String> editChestKey = new HashMap<UUID, String>();
-    private final Map<UUID, String> editPlayerUUID = new HashMap<UUID, String>();
-    private final Map<UUID, SellChestEditStep> editStep = new HashMap<UUID, SellChestEditStep>();
+    private final Map<UUID, String> inviteChestKey = new ConcurrentHashMap<>();
+    private final Map<UUID, String> invitePlayerName = new ConcurrentHashMap<>();
+    private final Map<UUID, SellChestInviteStep> inviteStep = new ConcurrentHashMap<>();
+    private final Map<UUID, String> editChestKey = new ConcurrentHashMap<>();
+    private final Map<UUID, String> editPlayerUUID = new ConcurrentHashMap<>();
+    private final Map<UUID, SellChestEditStep> editStep = new ConcurrentHashMap<>();
 
     public SellChestListener(MrSellChests plugin) {
         this.plugin = plugin;
         this.dbManager = plugin.getDatabaseManager();
-        this.linkingPlayers = new HashMap<UUID, String>();
+        this.linkingPlayers = new ConcurrentHashMap<>();
     }
 
     public void startHologramUpdateTask() {
@@ -79,17 +80,13 @@ implements Listener {
         }
         if (this.plugin.getConfig().getBoolean("MrSellChests.Holograms.Enabled", true)) {
             int updateInterval = this.plugin.getConfig().getInt("MrSellChests.Holograms.UpdateInterval", 20);
-            this.hologramUpdateTask = Bukkit.getScheduler().runTaskTimer((Plugin)this.plugin, () -> this.updateAllHolograms(), 0L, (long)updateInterval);
+            this.hologramUpdateTask = MrLibScheduler.runTaskTimer((Plugin)this.plugin, () -> this.updateAllHolograms(), 0L, (long)updateInterval);
         }
     }
 
     private void removeHologram(String holoName) {
-        Object object;
-        Object object2 = object = this.hologramLock;
-        synchronized (object2) {
-            this.plugin.getHologramManager().deleteHologram(holoName);
-            this.hologramCache.remove(holoName);
-        }
+        this.plugin.getHologramManager().deleteHologram(holoName);
+        this.hologramCache.remove(holoName);
     }
 
     private void cleanNearbyTextDisplays(Location chestLoc) {
@@ -117,177 +114,183 @@ implements Listener {
     }
 
     private void clearHologramCache() {
-        Object object;
-        Object object2 = object = this.hologramLock;
-        synchronized (object2) {
-            this.hologramCache.clear();
-        }
+        this.hologramCache.clear();
     }
 
     private void updateAllHolograms() {
-        Object object;
         if (!this.plugin.getConfig().getBoolean("MrSellChests.Holograms.Enabled", true)) {
             return;
         }
-        Object object2 = object = this.hologramLock;
-        synchronized (object2) {
+
+        for (String key : this.dbManager.getAllChestKeys()) {
             try {
-                for (String key : this.dbManager.getAllChestKeys()) {
-                    try {
-                        List<String> cachedLines;
-                        String chestType;
-                        String cleanKey = key.endsWith(":") ? key.substring(0, key.length() - 1) : key;
-                        String[] parts = cleanKey.split(":");
-                        if (parts.length != 4) continue;
-                        String holoName = "sellchest_" + parts[0] + "_" + parts[1] + "_" + parts[2] + "_" + parts[3];
-                        if (!this.dbManager.getChestHologramEnabled(key)) {
-                            this.hologramManuallyDisabled.put(holoName, true);
-                            if (!this.plugin.getHologramManager().hologramExists(holoName)) continue;
-                            this.removeHologram(holoName);
-                            this.hologramVisibility.put(holoName, false);
-                            continue;
-                        }
-                        this.hologramManuallyDisabled.remove(holoName);
-                        int x = Integer.parseInt(parts[1]);
-                        int y = Integer.parseInt(parts[2]);
-                        int z = Integer.parseInt(parts[3]);
-                        Location chestLoc = new Location(this.plugin.getServer().getWorld(parts[0]), (double)x + 0.5, (double)y + 0.5, (double)z + 0.5);
-                        boolean playerNearby = false;
-                        if (chestLoc.getWorld() != null) {
-                            for (Player player : chestLoc.getWorld().getPlayers()) {
-                                if (!(player.getLocation().distance(chestLoc) <= 20.0)) continue;
-                                playerNearby = true;
-                                break;
-                            }
-                        }
-                        Boolean currentlyVisible = this.hologramVisibility.get(holoName);
-                        boolean hologramExists = this.plugin.getHologramManager().hologramExists(holoName);
-                        if (!playerNearby && hologramExists) {
-                            this.removeHologram(holoName);
-                            this.hologramVisibility.put(holoName, false);
-                            continue;
-                        }
-                        if (!playerNearby || (chestType = this.dbManager.getChestType(key)) == null) continue;
-                        List<String> hologramLines = this.plugin.getConfig().getStringList("MrSellChests.SellChests." + chestType + ".Hologram");
-                        if (hologramLines.isEmpty()) {
-                            hologramLines = this.plugin.getConfig().getStringList("SellChests." + chestType + ".Hologram");
-                        }
-                        if (hologramLines.isEmpty()) continue;
-                        String ownerName = this.dbManager.getChestOwner(key);
-                        if (ownerName == null) {
-                            ownerName = "Unknown";
-                        }
-                        double boosterValue = this.plugin.getSellChestManager().getTotalBooster(key);
-                        long boostTime = this.plugin.getSellChestManager().getBoostTimeLeft(key);
-                        String booster = String.format("%.2f", boosterValue);
-                        
-                        String timeFormat;
-                        if (boostTime >= 86400) {
-                            timeFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Days", 
-                                    this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat", "%d d %h h %m m %s s"));
-                        } else if (boostTime >= 3600) {
-                            timeFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Hours", 
-                                    "%h h %m m %s s");
-                        } else if (boostTime >= 60) {
-                            timeFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Minutes", 
-                                    "%m m %s s");
-                        } else {
-                            timeFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Seconds", 
-                                    "%s s");
-                        }
-                        
-                        if (boostTime > 0L) {
-                            String formattedTime = this.formatTime(boostTime, timeFormat);
-                            
-                            String timeMsg = this.plugin.getMessage("boost_time_left");
-                            timeMsg = timeMsg != null ? timeMsg.replace("[Time]", formattedTime) : "&7Boost time left: " + formattedTime;
-                            booster = booster + "x " + timeMsg;
-                        }
-                        int itemsSold = this.dbManager.getItemsSold(key);
-                        int deletedItems = this.dbManager.getDeletedItems(key);
-                        double moneyEarned = this.dbManager.getMoneyEarned(key);
-                        int remainingSeconds = this.plugin.getSellChestManager().getRemainingSeconds(key);
-                        int chargedMinutes = this.dbManager.getChestChargingMinutes(key);
-                        
-                        int chargedSeconds = this.plugin.getSellChestManager().getRemainingChargingSeconds(key);
-                        
-                        String chargedFormat;
-                        if (chargedSeconds >= 86400) {
-                            chargedFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Days", 
-                                    this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat", "%d d %h h %m m %s s"));
-                        } else if (chargedSeconds >= 3600) {
-                            chargedFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Hours", 
-                                    "%h h %m m %s s");
-                        } else if (chargedSeconds >= 60) {
-                            chargedFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Minutes", 
-                                    "%m m %s s");
-                        } else {
-                            chargedFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Seconds", 
-                                    "%s s");
-                        }
-                        String formattedCharged = this.formatTime(chargedSeconds, chargedFormat);
-                        
-                        ArrayList<String> updatedLines = new ArrayList<String>();
-                        for (String line : hologramLines) {
-                            String updatedLine = line.replace("[PlayerName]", ownerName).replace("[Booster]", booster).replace("[ItemsSold]", String.valueOf(itemsSold)).replace("[DeletedItems]", String.valueOf(deletedItems)).replace("[MoneyEarned]", String.format("%.2f", moneyEarned)).replace("[Interval]", String.valueOf(remainingSeconds)).replace("[Remaining]", String.valueOf(remainingSeconds)).replace("[ChargedFor]", formattedCharged);
-                            updatedLines.add(MrLibColors.colorize(updatedLine));
-                        }
-                        if (playerNearby && !hologramExists) {
-                            this.hologramVisibility.put(holoName, true);
-                            this.cleanNearbyTextDisplays(chestLoc);
-                            try {
-                                double configHeight = this.plugin.getConfig().getDouble("MrSellChests.SellChests." + chestType + ".Hologram.Height", -1.0);
-                                if (configHeight == -1.0) {
-                                    configHeight = this.plugin.getConfig().getDouble("SellChests." + chestType + ".Hologram.Height", -1.0);
-                                }
-                                double yOffset = configHeight != -1.0 ? configHeight : ("MrLibCore-TextDisplay".equals(this.plugin.getHologramManager().getActiveProviderName()) ? 4.5 : 1.0);
-                                
-                                Location holoLoc = new Location(this.plugin.getServer().getWorld(parts[0]), (double)x + 0.5, (double)y + yOffset, (double)z + 0.5);
-                                if (holoLoc.getWorld() == null) continue;
-                                this.plugin.getHologramManager().createHologram(holoName, holoLoc, updatedLines);
-                                Object object3 = object = this.hologramLock;
-                                synchronized (object3) {
-                                    this.hologramCache.put(holoName, new ArrayList(updatedLines));
-                                }
-                            }
-                            catch (Exception yOffset) {
-                                // empty catch block
-                            }
-                        }
-                        boolean needsUpdate = (cachedLines = this.hologramCache.get(holoName)) == null || !cachedLines.equals(updatedLines);
-                        boolean bl = needsUpdate;
-                        if (!needsUpdate) continue;
-                        this.hologramCache.put(holoName, new ArrayList(updatedLines));
-                        if (this.plugin.getHologramManager().hologramExists(holoName)) {
-                            this.plugin.getHologramManager().updateHologram(holoName, updatedLines);
-                            continue;
-                        }
-                        this.cleanNearbyTextDisplays(chestLoc);
-                        try {
-                            double configHeight = this.plugin.getConfig().getDouble("MrSellChests.SellChests." + chestType + ".Hologram.Height", -1.0);
-                            if (configHeight == -1.0) {
-                                configHeight = this.plugin.getConfig().getDouble("SellChests." + chestType + ".Hologram.Height", -1.0);
-                            }
-                            double yOffset = configHeight != -1.0 ? configHeight : ("MrLibCore-TextDisplay".equals(this.plugin.getHologramManager().getActiveProviderName()) ? 4.5 : 1.0);
-                            
-                            Location holoLoc = new Location(this.plugin.getServer().getWorld(parts[0]), (double)x + 0.5, (double)y + yOffset, (double)z + 0.5);
-                            if (holoLoc.getWorld() == null) continue;
-                            this.plugin.getHologramManager().createHologram(holoName, holoLoc, updatedLines);
-                        }
-                        catch (Exception exception) {
-                        }
-                    }
-                    catch (Exception e) {
-                        e.printStackTrace();
-                    }
-                }
-                if ("MrLibCore-Entity".equals(this.plugin.getHologramManager().getActiveProviderName())) {
-                    this.plugin.getHologramManager().forceUpdateAllEntityHolograms();
-                }
-            }
-            catch (Exception e) {
+                String cleanKey = key.endsWith(":") ? key.substring(0, key.length() - 1) : key;
+                String[] parts = cleanKey.split(":");
+                if (parts.length != 4) continue;
+                String holoName = "sellchest_" + parts[0] + "_" + parts[1] + "_" + parts[2] + "_" + parts[3];
+
+                int x = Integer.parseInt(parts[1]);
+                int y = Integer.parseInt(parts[2]);
+                int z = Integer.parseInt(parts[3]);
+                Location chestLoc = new Location(this.plugin.getServer().getWorld(parts[0]), (double)x + 0.5, (double)y + 0.5, (double)z + 0.5);
+
+                if (chestLoc.getWorld() == null) continue;
+
+                MrLibScheduler.runTaskForRegion(plugin, chestLoc, () -> {
+                    updateHologramForChest(key, holoName, chestLoc, parts, x, y, z);
+                });
+
+            } catch (Exception e) {
                 e.printStackTrace();
             }
+        }
+        
+        if ("MrLibCore-Entity".equals(this.plugin.getHologramManager().getActiveProviderName())) {
+            this.plugin.getHologramManager().forceUpdateAllEntityHolograms();
+        }
+    }
+
+    private void updateHologramForChest(String key, String holoName, Location chestLoc, String[] parts, int x, int y, int z) {
+        try {
+            if (!this.dbManager.getChestHologramEnabled(key)) {
+                this.hologramManuallyDisabled.put(holoName, true);
+                if (this.plugin.getHologramManager().hologramExists(holoName)) {
+                    this.removeHologram(holoName);
+                    this.hologramVisibility.put(holoName, false);
+                }
+                return;
+            }
+            this.hologramManuallyDisabled.remove(holoName);
+
+            boolean playerNearby = false;
+            if (chestLoc.getWorld() != null) {
+                for (Player player : chestLoc.getWorld().getPlayers()) {
+                    if (player.getLocation().distance(chestLoc) <= 20.0) {
+                        playerNearby = true;
+                        break;
+                    }
+                }
+            }
+
+            boolean hologramExists = this.plugin.getHologramManager().hologramExists(holoName);
+            if (!playerNearby && hologramExists) {
+                this.removeHologram(holoName);
+                this.hologramVisibility.put(holoName, false);
+                return;
+            }
+
+            String chestType;
+            if (!playerNearby || (chestType = this.dbManager.getChestType(key)) == null) return;
+            
+            List<String> hologramLines = this.plugin.getConfig().getStringList("MrSellChests.SellChests." + chestType + ".Hologram");
+            if (hologramLines.isEmpty()) {
+                hologramLines = this.plugin.getConfig().getStringList("SellChests." + chestType + ".Hologram");
+            }
+            if (hologramLines.isEmpty()) return;
+
+            String ownerName = this.dbManager.getChestOwner(key);
+            if (ownerName == null) {
+                ownerName = "Unknown";
+            }
+            double boosterValue = this.plugin.getSellChestManager().getTotalBooster(key);
+            long boostTime = this.plugin.getSellChestManager().getBoostTimeLeft(key);
+            String booster = String.format("%.2f", boosterValue);
+            
+            String timeFormat;
+            if (boostTime >= 86400) {
+                timeFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Days", 
+                        this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat", "%d d %h h %m m %s s"));
+            } else if (boostTime >= 3600) {
+                timeFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Hours", 
+                        "%h h %m m %s s");
+            } else if (boostTime >= 60) {
+                timeFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Minutes", 
+                        "%m m %s s");
+            } else {
+                timeFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Seconds", 
+                        "%s s");
+            }
+            
+            if (boostTime > 0L) {
+                String formattedTime = this.formatTime(boostTime, timeFormat);
+                
+                String timeMsg = this.plugin.getMessage("boost_time_left");
+                timeMsg = timeMsg != null ? timeMsg.replace("[Time]", formattedTime) : "&7Boost time left: " + formattedTime;
+                booster = booster + "x " + timeMsg;
+            }
+            int itemsSold = this.dbManager.getItemsSold(key);
+            int deletedItems = this.dbManager.getDeletedItems(key);
+            double moneyEarned = this.dbManager.getMoneyEarned(key);
+            int remainingSeconds = this.plugin.getSellChestManager().getRemainingSeconds(key);
+            
+            int chargedSeconds = this.plugin.getSellChestManager().getRemainingChargingSeconds(key);
+            
+            String chargedFormat;
+            if (chargedSeconds >= 86400) {
+                chargedFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Days", 
+                        this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat", "%d d %h h %m m %s s"));
+            } else if (chargedSeconds >= 3600) {
+                chargedFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Hours", 
+                        "%h h %m m %s s");
+            } else if (chargedSeconds >= 60) {
+                chargedFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Minutes", 
+                        "%m m %s s");
+            } else {
+                chargedFormat = this.plugin.getConfig().getString("MrSellChests.Holograms.TimeFormat_Seconds", 
+                        "%s s");
+            }
+            String formattedCharged = this.formatTime(chargedSeconds, chargedFormat);
+            
+            ArrayList<String> updatedLines = new ArrayList<String>();
+            for (String line : hologramLines) {
+                String updatedLine = line.replace("[PlayerName]", ownerName).replace("[Booster]", booster).replace("[ItemsSold]", String.valueOf(itemsSold)).replace("[DeletedItems]", String.valueOf(deletedItems)).replace("[MoneyEarned]", String.format("%.2f", moneyEarned)).replace("[Interval]", String.valueOf(remainingSeconds)).replace("[Remaining]", String.valueOf(remainingSeconds)).replace("[ChargedFor]", formattedCharged);
+                updatedLines.add(MrLibColors.colorize(updatedLine));
+            }
+            if (playerNearby && !hologramExists) {
+                this.hologramVisibility.put(holoName, true);
+                this.cleanNearbyTextDisplays(chestLoc);
+                try {
+                    double configHeight = this.plugin.getConfig().getDouble("MrSellChests.SellChests." + chestType + ".Hologram.Height", -1.0);
+                    if (configHeight == -1.0) {
+                        configHeight = this.plugin.getConfig().getDouble("SellChests." + chestType + ".Hologram.Height", -1.0);
+                    }
+                    double yOffset = configHeight != -1.0 ? configHeight : ("MrLibCore-TextDisplay".equals(this.plugin.getHologramManager().getActiveProviderName()) ? 4.5 : 1.0);
+                    
+                    Location holoLoc = new Location(this.plugin.getServer().getWorld(parts[0]), (double)x + 0.5, (double)y + yOffset, (double)z + 0.5);
+                    if (holoLoc.getWorld() != null) {
+                        this.plugin.getHologramManager().createHologram(holoName, holoLoc, updatedLines);
+                        this.hologramCache.put(holoName, new ArrayList<>(updatedLines));
+                    }
+                }
+                catch (Exception e) {
+                }
+            }
+            List<String> cachedLines = this.hologramCache.get(holoName);
+            boolean needsUpdate = cachedLines == null || !cachedLines.equals(updatedLines);
+            if (!needsUpdate) return;
+            
+            this.hologramCache.put(holoName, new ArrayList<>(updatedLines));
+            if (this.plugin.getHologramManager().hologramExists(holoName)) {
+                this.plugin.getHologramManager().updateHologram(holoName, updatedLines);
+                return;
+            }
+            this.cleanNearbyTextDisplays(chestLoc);
+            try {
+                double configHeight = this.plugin.getConfig().getDouble("MrSellChests.SellChests." + chestType + ".Hologram.Height", -1.0);
+                if (configHeight == -1.0) {
+                    configHeight = this.plugin.getConfig().getDouble("SellChests." + chestType + ".Hologram.Height", -1.0);
+                }
+                double yOffset = configHeight != -1.0 ? configHeight : ("MrLibCore-TextDisplay".equals(this.plugin.getHologramManager().getActiveProviderName()) ? 4.5 : 1.0);
+                
+                Location holoLoc = new Location(this.plugin.getServer().getWorld(parts[0]), (double)x + 0.5, (double)y + yOffset, (double)z + 0.5);
+                if (holoLoc.getWorld() != null) {
+                    this.plugin.getHologramManager().createHologram(holoName, holoLoc, updatedLines);
+                }
+            }
+            catch (Exception exception) {
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
         }
     }
 
@@ -549,10 +552,10 @@ implements Listener {
                 int z = Integer.parseInt(parts[3]);
                 Location chestLoc = new Location(Bukkit.getWorld((String)parts[0]), (double)x + 0.5, (double)y + 0.5, (double)z + 0.5);
                 if (chestLoc.getWorld() == null) continue;
-                for (Entity entity : chestLoc.getWorld().getNearbyEntities(chestLoc, 8.0, 8.0, 8.0)) {
-                    if (!entity.getType().name().equals("TEXT_DISPLAY")) continue;
-                    entity.remove();
-                }
+                
+                MrLibScheduler.runTaskForRegion(plugin, chestLoc, () -> {
+                    cleanNearbyTextDisplays(chestLoc);
+                });
             }
         }
         catch (Exception exception) {
@@ -578,10 +581,16 @@ implements Listener {
             String[] parts = cleanKey.split(":");
             if (parts.length != 4) continue;
             String holoName = "sellchest_" + parts[0] + "_" + parts[1] + "_" + parts[2] + "_" + parts[3];
-            this.plugin.getHologramManager().deleteHologram(holoName);
+            
+            try {
+                this.plugin.getHologramManager().deleteHologram(holoName);
+            } catch (Exception e) {
+            }
         }
         this.clearHologramCache();
-        this.purgeStraySellChestHolograms();
+        if (plugin.isEnabled()) {
+            this.purgeStraySellChestHolograms();
+        }
     }
 
     public void restoreAllSellChestHolograms() {
@@ -590,7 +599,6 @@ implements Listener {
         }
         for (String key : this.dbManager.getAllChestKeys()) {
             try {
-                Object object;
                 String chestType;
                 String[] parts;
                 if (!this.dbManager.getChestHologramEnabled(key) || (parts = key.split(":")).length != 4 || (chestType = this.dbManager.getChestType(key)) == null) continue;
@@ -639,28 +647,31 @@ implements Listener {
                     updatedLines.add(MrLibColors.colorize(updatedLine));
                 }
                 String holoName = "sellchest_" + parts[0] + "_" + parts[1] + "_" + parts[2] + "_" + parts[3];
-                Location worldLoc = null;
-                Location chestLoc = null;
+                
                 try {
-                    chestLoc = new Location(Bukkit.getWorld((String)parts[0]), Double.parseDouble(parts[1]) + 0.5, Double.parseDouble(parts[2]) + 0.5, Double.parseDouble(parts[3]) + 0.5);
+                    Location chestLoc = new Location(Bukkit.getWorld((String)parts[0]), Double.parseDouble(parts[1]) + 0.5, Double.parseDouble(parts[2]) + 0.5, Double.parseDouble(parts[3]) + 0.5);
+                    if (chestLoc.getWorld() == null) continue;
                     
-                    double configHeight = this.plugin.getConfig().getDouble("MrSellChests.SellChests." + chestType + ".Hologram.Height", -1.0);
-                    if (configHeight == -1.0) {
-                        configHeight = this.plugin.getConfig().getDouble("SellChests." + chestType + ".Hologram.Height", -1.0);
-                    }
-                    double yOffset = configHeight != -1.0 ? configHeight : ("MrLibCore-TextDisplay".equals(this.plugin.getHologramManager().getActiveProviderName()) ? 4.5 : 1.0);
-                    
-                    worldLoc = new Location(Bukkit.getWorld((String)parts[0]), Double.parseDouble(parts[1]) + 0.5, Double.parseDouble(parts[2]) + yOffset, Double.parseDouble(parts[3]) + 0.5);
+                    MrLibScheduler.runTaskForRegion(plugin, chestLoc, () -> {
+                        try {
+                            double configHeight = this.plugin.getConfig().getDouble("MrSellChests.SellChests." + chestType + ".Hologram.Height", -1.0);
+                            if (configHeight == -1.0) {
+                                configHeight = this.plugin.getConfig().getDouble("SellChests." + chestType + ".Hologram.Height", -1.0);
+                            }
+                            double yOffset = configHeight != -1.0 ? configHeight : ("MrLibCore-TextDisplay".equals(this.plugin.getHologramManager().getActiveProviderName()) ? 4.5 : 1.0);
+                            
+                            Location worldLoc = new Location(chestLoc.getWorld(), chestLoc.getX(), chestLoc.getY() - 0.5 + yOffset, chestLoc.getZ());
+                            
+                            this.cleanNearbyTextDisplays(chestLoc);
+                            this.plugin.getHologramManager().createHologram(holoName, worldLoc, updatedLines);
+                            this.hologramCache.put(holoName, new ArrayList<>(updatedLines));
+                        } catch (Exception e) {
+                            e.printStackTrace();
+                        }
+                    });
                 }
                 catch (Exception exception) {
                     // empty catch block
-                }
-                if (worldLoc == null || worldLoc.getWorld() == null) continue;
-                this.cleanNearbyTextDisplays(chestLoc);
-                this.plugin.getHologramManager().createHologram(holoName, worldLoc, updatedLines);
-                Object object2 = object = this.hologramLock;
-                synchronized (object2) {
-                    this.hologramCache.put(holoName, new ArrayList(updatedLines));
                 }
             }
             catch (Exception e) {
@@ -681,7 +692,7 @@ implements Listener {
     public void updateAllSellChestHolograms() {
         this.removeAllSellChestHolograms();
         this.clearHologramCache();
-        Bukkit.getScheduler().runTaskLater((Plugin)this.plugin, () -> this.restoreAllSellChestHolograms(), 10L);
+        MrLibScheduler.runTaskLater((Plugin)this.plugin, () -> this.restoreAllSellChestHolograms(), 10L);
     }
 
     @EventHandler
@@ -749,7 +760,7 @@ implements Listener {
                     }
                     boolean added = this.plugin.getSellChestManager().addItemToChest(destKey, itemToMove.clone());
                     if (added) {
-                        Bukkit.getScheduler().runTask((Plugin)this.plugin, () -> {
+                        MrLibScheduler.runTask((Plugin)this.plugin, () -> {
                             ItemStack[] destContents = destination.getContents();
                             for (int i = 0; i < destContents.length; ++i) {
                                 ItemStack stackInDest = destContents[i];
@@ -916,7 +927,7 @@ implements Listener {
             } else {
                 this.plugin.sendMessage(player, this.plugin.getMessage("invite_uninvite_success_offline"));
             }
-            Bukkit.getScheduler().runTask((Plugin)this.plugin, () -> this.plugin.getSellChestManager().openInvitePlayersMenu(player, chestKey));
+            MrLibScheduler.runTask((Plugin)this.plugin, () -> this.plugin.getSellChestManager().openInvitePlayersMenu(player, chestKey));
         }
         catch (Exception e) {
             this.plugin.sendMessage(player, this.plugin.getMessage("invite_uninvite_failed"));

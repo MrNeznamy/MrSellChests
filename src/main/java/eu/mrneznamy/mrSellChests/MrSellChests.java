@@ -12,6 +12,7 @@ import eu.mrneznamy.mrlibcore.economy.MrLibVaultManager;
 import eu.mrneznamy.mrlibcore.holograms.MrLibHologramManager;
 import eu.mrneznamy.mrlibcore.messages.MrLibMessage;
 import eu.mrneznamy.mrlibcore.utils.MrLibColors;
+import eu.mrneznamy.mrlibcore.scheduler.MrLibScheduler;
 import eu.mrneznamy.mrlibcore.utils.MrLibConsoleSayer;
 import eu.mrneznamy.mrlibcore.utils.MrLibHelper;
 import java.io.File;
@@ -77,10 +78,14 @@ extends JavaPlugin {
         this.messageSystem = new MrLibMessage((JavaPlugin)this);
         this.prefix = MrLibColors.colorize((String)this.messagesConfig.getString("MrSellChests.Prefix", "&8[&aMrSellChests&8]"));
         if (!this.setupEconomy()) {
-            String vaultMessage = this.messagesConfig.getString("MrSellChests.vault_not_found", "&cDisabled due to no Vault dependency found!");
-            this.getLogger().severe(MrLibColors.colorize((String)vaultMessage));
-            this.getServer().getPluginManager().disablePlugin((Plugin)this);
-            return;
+            if (this.getServer().getPluginManager().getPlugin("Vault") != null || this.getServer().getPluginManager().getPlugin("VaultUnlocked") != null) {
+                this.getLogger().warning("Vault/VaultUnlocked found, but economy provider is not ready yet. Waiting...");
+            } else {
+                String vaultMessage = this.messagesConfig.getString("MrSellChests.vault_not_found", "&cDisabled due to no Vault dependency found!");
+                this.getLogger().severe(MrLibColors.colorize((String)vaultMessage));
+                this.getServer().getPluginManager().disablePlugin((Plugin)this);
+                return;
+            }
         }
         this.sellChestManager = new SellChestManager(this);
         this.getCommand("msc").setExecutor((CommandExecutor)new Commands(this));
@@ -103,13 +108,13 @@ extends JavaPlugin {
             MrLibConsoleSayer.MrSay_Success((String)("Hologram Provider: " + hologramProvider));
         }
         this.sellChestListener.removeAllSellChestHolograms();
-        Bukkit.getScheduler().runTaskLater((Plugin)this, () -> this.sellChestListener.startHologramUpdateTask(), 20L);
+        MrLibScheduler.runTaskLater((Plugin)this, () -> this.sellChestListener.startHologramUpdateTask(), 20L);
         this.registerCustomItems();
-        Bukkit.getScheduler().runTask((Plugin)this, this::registerHelpCommands);
+        MrLibScheduler.runTask((Plugin)this, this::registerHelpCommands);
     }
 
     private boolean setupEconomy() {
-        if (this.getServer().getPluginManager().getPlugin("Vault") == null) {
+        if (this.getServer().getPluginManager().getPlugin("Vault") == null && this.getServer().getPluginManager().getPlugin("VaultUnlocked") == null) {
             return false;
         }
         return MrLibVaultManager.getInstance().isEnabled();
@@ -257,7 +262,7 @@ extends JavaPlugin {
 
     public void reloadConfiguration() {
         if (!Bukkit.isPrimaryThread()) {
-            Bukkit.getScheduler().runTask((Plugin)this, this::reloadConfiguration);
+            MrLibScheduler.runTask((Plugin)this, this::reloadConfiguration);
             return;
         }
         try {
@@ -322,7 +327,7 @@ extends JavaPlugin {
     }
 
     private void registerCustomItems() {
-        Bukkit.getScheduler().runTaskLater((Plugin)this, () -> {
+        MrLibScheduler.runTaskLater((Plugin)this, () -> {
             if (Bukkit.getPluginManager().getPlugin("MrUltimateShop") != null) {
                 try {
                     Class<?> apiClass = Class.forName("eu.mrneznamy.mrultimateshop.api.MrUltimateShopAPI");
